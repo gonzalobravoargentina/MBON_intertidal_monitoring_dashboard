@@ -11,6 +11,3 @@ This project contains an interactive dashboard for analyzing and visualizing dat
 ### Dashboard Preview
 ![Dashboard Preview](https://github.com/gonzalobravoargentina/MBON_intertidal_monitoring_dashboard/blob/main/dashboard.png)
 
-### Logo
-
-![Logo](https://github.com/gonzalobravoargentina/MBON_intertidal_monitoring_dashboard/blob/main/logo.png)
