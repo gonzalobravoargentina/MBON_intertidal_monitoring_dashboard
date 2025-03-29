@@ -5,6 +5,8 @@ output:
     theme: lumen
     source: embed
     logo: logo.png
+    navbar:
+      - { title: "Protocolo Muestreo", icon: "ion-android-document", href: "https://repository.oceanbestpractices.org/handle/11329/2199.2", align: right }
 ---
 
 ```{r setup, include=FALSE}
@@ -27,7 +29,8 @@ library(xts)
 library(htmlwidgets)
 library(vegan)
 library(janitor)
-
+library(geosphere)
+library(purrr)
 library(RColorBrewer)
 palette(brewer.pal(8, "Set2"))
 
@@ -136,43 +139,112 @@ nombres_actualizados <- recode(Coverdata_AMPs$CATAMI,
 # Reemplazar la columna original con los nombres actualizados
 Coverdata_AMPs$CATAMI <- nombres_actualizados
 
+# Contar los valores únicos para cada columna
+num_countries <- length(unique(AMP$country))
+num_localities <- length(unique(AMP$locality))
+num_sites <- length(unique(AMP$site))
+num_years <- length(unique(AMP$year))
+num_fotocuadrantes <- length(unique(AMP$Name))
+metros_cuadrados <- round(num_fotocuadrantes * 0.0625)
+
+# Función para detectar linealidad en las transectas y añadir columna de advertencia
+check_strata_linearity <- function(data, threshold = 20) {
+  
+  # Filtrar datos con coordenadas válidas
+  data <- data %>%
+    filter(!is.na(Latitude), !is.na(Longitude))
+  
+  # Agrupar por sitio, fecha y estrato, asegurando que haya más de un fotocuadrante
+  data_grouped <- data %>%
+    group_by(site, Date, strata) %>%
+    filter(n() > 1) %>%
+    arrange(Longitude, Latitude) %>%
+    reframe(
+      site = first(site),
+      Date = first(Date),
+      strata = first(strata),
+      start_lon = first(Longitude),
+      start_lat = first(Latitude),
+      end_lon = last(Longitude),
+      end_lat = last(Latitude)
+    )
+  
+  # Calcular distancia entre extremos
+  data_grouped <- data_grouped %>%
+    mutate(
+      line_distance = distVincentySphere(
+        cbind(start_lon, start_lat), 
+        cbind(end_lon, end_lat)
+      ),
+      warning_flag = line_distance < threshold
+    )
+  
+  # Añadir columna de advertencia a `AMP`
+  data <- data %>%
+    left_join(data_grouped %>% select(site, Date, strata, line_distance, warning_flag), 
+              by = c("site", "Date", "strata")) %>%
+    mutate(warning_flag = ifelse(is.na(warning_flag), FALSE, warning_flag))
+  
+  return(data)
+}
+
 
 ```
 
+# MAPA
 
-# Mapa
-
-Column {data-width=550}
--------------------------------------
+## Column {data-width="700"}
 
 ### Sitios de muestreo
+
 ```{r map, message=FALSE, warning=FALSE}
 
-# Combinar las columnas year y estacion en una columna llamada tiempo
-AMP$tiempo <- paste(AMP$year, AMP$estacion, sep = "_")
+library(leaflet)
+library(dplyr)
 
-# Crear el mapa
+# Crear una copia de AMP para el mapa
+AMP_map <- AMP
+
+# Aplicar la función solo a AMP_map
+AMP_map <- check_strata_linearity(AMP_map)
+
+# Crear una nueva columna 'tiempo' combinando year y estación
+AMP_map$tiempo <- paste(AMP_map$year, AMP_map$estacion, sep = "_")
+
+# Coordenadas del centro del mapa
+center_lat <- mean(AMP_map$Latitude, na.rm = TRUE)
+center_lng <- mean(AMP_map$Longitude, na.rm = TRUE)
+
+# Definir colores para los estratos
+color_palette <- colorFactor(c("red", "blue", "green"), 
+                             domain = c("HIGHTIDE", "MIDTIDE", "LOWTIDE"))
+
+# Filtrar puntos con advertencias
+AMP_warning <- AMP_map %>% filter(warning_flag)
+
+# Crear el mapa base con opción de cambiar entre Esri.WorldImagery y Esri.WorldPhysical
 map <- leaflet(options = leafletOptions(zoomControl = TRUE,
                                         zoomSnap = 0.25,
                                         zoomDelta = 1)) %>%
-  addProviderTiles('Esri.WorldImagery',
-                   options = providerTileOptions(maxNativeZoom=19,maxZoom=100),
-                   group = "Satelite"
-  ) %>%
-  addProviderTiles(
-    "OpenStreetMap",
-    group = "Mapa para zoom"
-  ) %>%
+  addProviderTiles(providers$Esri.WorldImagery, 
+                   options = providerTileOptions(maxNativeZoom = 19, maxZoom = 100),
+                   group = "Satelite") %>%
+  addProviderTiles(providers$Stadia.OSMBright, 
+                   options = providerTileOptions(maxNativeZoom = 19, maxZoom = 100),
+                   group = "Mapa para zoom") %>%
   addLayersControl(
-    baseGroups = c("Satelite", "Mapa para zoom"),
+    baseGroups = c("Satelite", "Mapa para zoom"),  # Cambio aquí
+    overlayGroups = c(unique(AMP_map$tiempo), "Advertencias"),  # Asegurar overlays
+    options = layersControlOptions(collapsed = FALSE),
     position = "topleft"
-  )
+  ) %>%
+  setView(lng = center_lng, lat = center_lat, zoom = 5)  
 
-# Añadir puntos para cada tiempo como capas separadas
-for (tiempo in unique(AMP$tiempo)) {
+# Añadir los puntos de cada "tiempo" como capas separadas
+for (tiempo in unique(AMP_map$tiempo)) {
   map <- map %>%
     addCircleMarkers(
-      data = AMP[AMP$tiempo == tiempo, ], 
+      data = AMP_map %>% filter(tiempo == !!tiempo),
       ~Longitude, 
       ~Latitude,
       weight = 0.5,
@@ -180,98 +252,93 @@ for (tiempo in unique(AMP$tiempo)) {
       fillOpacity = 0.5,
       stroke = TRUE,
       popup = ~paste("Strata:", strata, "<br>", "Name:", Name),
-      color = ~factor(strata),
-      fillColor = ~factor(strata) %>% 
-        {ifelse(. == "HIGHTIDE", "red", ifelse(. == "MIDTIDE", "blue", "green"))},
-      group = as.character(tiempo)  # Asignar cada punto a su tiempo correspondiente como un grupo separado
+      color = ~color_palette(strata),
+      fillColor = ~color_palette(strata),
+      group = as.character(tiempo) 
     )
 }
 
-# Agregar control de capas para seleccionar el tiempo
+# Añadir puntos con advertencia en color naranja y mostrar la distancia en el popup
 map <- map %>%
-  addLayersControl(
-    overlayGroups = unique(AMP$tiempo),  # Lista de tiempos para seleccionar
-    options = layersControlOptions(collapsed = FALSE)  # Panel desplegado por defecto
-  ) %>%
-  addControl(html = "<div id='legend'>Estratos: <br><i style='background: red'></i> Alta <br><i style='background: blue'></i> Media <br><i style='background: green'></i> Baja </div>",
-             position = "bottomright")
+  addCircleMarkers(
+    data = AMP_warning,
+    ~Longitude, 
+    ~Latitude,
+    weight = 1,
+    radius = 6,
+    fillOpacity = 0.8,
+    stroke = TRUE,
+    popup = ~paste("Advertencia: Línea de muestreo < 20m<br>",
+                   "Distancia de línea: ", round(line_distance, 2), " metros<br>",  
+                   "Site:", site, "<br>",
+                   "Strata:", strata, "<br>",
+                   "Fecha:", Date),
+    color = "orange",
+    fillColor = "orange",
+    group = "Advertencias"
+  )
 
-map  # Mostrar el mapa
+# Agregar elementos extra
+map <- map %>%
+  addControl(html = "<div id='legend'>Estratos: <br>
+                     <i style='background: red'></i> Alta <br>
+                     <i style='background: blue'></i> Media <br>
+                     <i style='background: green'></i> Baja <br>
+                     <i style='background: orange'></i> Advertencias </div>",
+             position = "bottomright") %>%
+  addScaleBar(position = "bottomleft", options = scaleBarOptions(metric = TRUE)) %>%
+  addMiniMap(tiles = providers$Esri.WorldStreetMap, 
+             toggleDisplay = TRUE, 
+             minimized = FALSE, position = "topright")
 
+# Mostrar el mapa
+map
 
 ```
 
-Column {data-width=450}
--------------------------------------
+## Column {data-width="300"}
 
-### Conteo fotoquadrantes
+### Paises
+
 ```{r}
-library(dplyr)
-library(tidyr)
-library(DT)
+valueBox(num_countries, "Países", icon = "ion-android-globe", color = "info")
+```
 
-# Calcular la tabla con todos los valores
-table_data <- as.data.frame(table(AMP$year, AMP$month, AMP$locality))
+### Localidades
 
-# Filtrar la tabla para eliminar filas con n igual a cero
-table_filtered <- table_data[table_data$Freq != 0, ]
-
-# Renombrar las columnas
-colnames(table_filtered) <- c("Año", "Mes", "Localidad", "n")
-
-# Agregar una columna que clasifique los meses como "Cálida" o "Fría"
-table_filtered <- table_filtered %>%
-  mutate(Estacion = ifelse(Mes %in% c(12, 1, 2, 3, 4, 5), "Cálida", "Fría"))
-
-# Calcular la suma total de la columna n agrupada por Año, Estacion y Localidad
-total_n <- table_filtered %>%
-  group_by(Año, Estacion, Localidad) %>%
-  summarize(Total_n = sum(n), .groups = "drop")
-
-# Obtener la latitud promedio de cada localidad sin renombrar
-localidades_lat <- AMP %>%
-  group_by(locality) %>%
-  summarise(Latitude = mean(Latitude, na.rm = TRUE)) %>%
-  ungroup()
-
-# Hacer el join cambiando el nombre dentro del join
-total_n <- total_n %>%
-  left_join(localidades_lat, by = c("Localidad" = "locality"))
-
-# Pivotear la tabla para tener años como columnas y dentro de cada año las estaciones Cálida y Fría
-tabla_pivot <- total_n %>%
-  pivot_wider(names_from = c(Año, Estacion), values_from = Total_n, values_fill = 0) %>%
-  arrange(desc(Latitude)) %>%  # Ordenar de norte a sur (mayor latitud primero)
-  select(-Latitude)  # Eliminar la columna de latitud después del ordenamiento
-
-# Agregar una columna de totales por localidad
-tabla_pivot <- tabla_pivot %>%
-  mutate(Total_Localidad = rowSums(select(., -Localidad)))
-
-# Agregar una fila con los totales de cada columna excepto Localidad
-fila_totales <- tabla_pivot %>%
-  summarise(across(where(is.numeric), sum)) %>%
-  mutate(Localidad = "Total General")  # Agregar nombre en la columna Localidad
-
-# Unir la fila de totales con la tabla final
-tabla_pivot <- bind_rows(tabla_pivot, fila_totales)
-
-# Crear la tabla interactiva con DT
-datatable(tabla_pivot, 
-          options = list(
-            scrollX = TRUE,  # Habilita desplazamiento horizontal
-            scrollY = "50vh", # Se ajusta dinámicamente a la altura del panel
-            paging = FALSE,  # Desactiva paginación para mostrar todo el contenido
-            searching = TRUE,  # Habilita la búsqueda
-            autoWidth = TRUE,  # Ajusta el ancho de las columnas
-            dom = 't'  # Muestra solo la tabla sin controles adicionales
-          ), 
-          rownames = FALSE)  # Oculta los números de fila
+```{r}
+valueBox(num_localities, "Localidades", icon = "ion-android-home", color = "success")
 
 ```
 
+### Sitios
 
-# Riqueza de especies
+```{r}
+valueBox(num_sites, "Sitios", icon = "ion-android-pin", color = "warning")
+
+```
+
+### Años
+
+```{r}
+valueBox(num_years, "Años", icon = "ion-android-time", color = "danger")
+
+```
+
+### Fotoquadrantes
+
+```{r}
+valueBox(num_fotocuadrantes, "Fotocuadrantes", icon = "ion-android-camera", color = "primary")
+
+```
+
+### mcuadrados
+```{r}
+valueBox(metros_cuadrados, "Metros cuadrados muestreados",  icon = "ion-android-map",color="gray")
+```
+
+# ESPECIES X LATITUD
+
 ```{r}
 library(dplyr)
 library(ggplot2)
@@ -331,7 +398,7 @@ catamirichness_line <- ggplot(spp_avg, aes(x = Latitude, y = avg_spp, color = st
   geom_point(size = 3) +  # Puntos para cada estrato
   geom_smooth(method = "loess", se = FALSE, size = 1) +  # Línea de tendencia (suavizado LOESS)
   theme_bw() +
-  labs(x = "Latitud", y = "Promedio de categorías CATAMI", title = "Cantidad promedio de categorías CATAMI según latitud") +
+  labs(x = "Latitud", y = "Promedio de categorías CATAMI", title = "Cantidad promedio de categorías CATAMI según latitud y lineas de tendencia") +
   theme(axis.text.x = element_text(size = 12),  # Ajuste de las etiquetas del eje X
         axis.text.y = element_text(size = 12),  # Ajuste de las etiquetas del eje Y
         legend.position = "none") +  # Eliminar la leyenda
@@ -342,7 +409,6 @@ ggplotly(catamirichness_line, tooltip = "text")
 
 
 ```
-
 
 ```{r include=FALSE}
 
@@ -377,7 +443,8 @@ for (localidad in localidades_unicas) {
 
 ```
 
-# Indicador Bivalvos (ALARMA)
+# INDICADOR BIVALVOS
+
 ```{r polar plot, message=FALSE, warning=FALSE}
 library(dplyr)
 library(ggplot2)
@@ -432,7 +499,7 @@ p <- ggplot(MOB_data, aes(x = index, y = mean_coverage, group = 1,
   
   theme_minimal() +
   labs(
-    title = "Cobertura (%) de Bivalvos en estrato Medio",
+    title = "Cobertura promedio de bivalvos en estrato Medio",
     x = NULL,
     y = "Cobertura promedio (%)"
   ) + 
@@ -450,92 +517,257 @@ ggplotly(p, tooltip = "text") %>%
 
 ```
 
-# Cobertura de categorias por localidades
+# COBERTURA (%) ESPECIES
 
-Column1 {.tabset .tabset-fade}
--------
+## Column1 {.tabset .tabset-fade}
 
 ### PUNTA DEL DIABLO
+
 ```{r}
 plot_list[[12]]
 ```
 
 ### LA PALOMA
+
 ```{r}
 plot_list[[3]]
 ```
 
 ### MAR DEL PLATA
+
 ```{r}
 plot_list[[5]]
 ```
 
 ### ISLOTE LOBOS
+
 ```{r}
 plot_list[[2]]
 ```
 
 ### PUNTA BS AS
+
 ```{r}
 plot_list[[10]]
 ```
 
 ### PUNTA LOMA
+
 ```{r}
 plot_list[[13]]
 ```
 
 ### PUNTA TOMBO
+
 ```{r}
 plot_list[[14]]
 ```
 
 ### CABO DOS BAHIAS
+
 ```{r}
 plot_list[[1]]
 ```
 
 ### PIMCPA
+
 ```{r}
 plot_list[[6]]
 ```
 
 ### PIMCPA_ISLA TOVA
+
 ```{r}
 plot_list[[7]]
 ```
 
 ### PUNTA BUQUE
+
 ```{r}
 plot_list[[11]]
 ```
 
 ### MAKENKE
+
 ```{r}
 plot_list[[4]]
 ```
 
 ### MONTE LEON
+
 ```{r}
 plot_list[[16]]
 ```
 
 ### RESERVA COSTA ATLANTICA
+
 ```{r}
 plot_list[[15]]
 ```
 
 ### PLAYA LARGA_USH
+
 ```{r}
 plot_list[[8]]
 ```
 
 ### PNTDF
+
 ```{r}
 plot_list[[9]]
 ```
 
-# Cluster
+
+# CATAMI
+
+```{r Heatmaps, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(forcats)
+library(tidyverse)
+
+# Lista de categorías CATAMI de interés
+catami_seleccion <- c("MAEN", "MAF", "CRB", "MAA", "MAEC", "MAG", "MAS", "MOB", "MOG", "SC", "WPOT", "MALCB")
+
+# Crear nueva columna sumando las macroalgas
+AMP <- AMP %>%
+  mutate(Macroalgae = rowSums(select(., c("MAA", "MAEC", "MAEF", "MAEN", "MAF", "MAG", "MALA", "MAS")), na.rm = TRUE))
+
+# Seleccionar columnas necesarias y calcular promedios por localidad y strata
+AMP_heatmap <- AMP %>%
+  select(locality, strata, Latitude, all_of(catami_seleccion)) %>%
+  pivot_longer(cols = -c(locality, strata, Latitude), names_to = "Categoria", values_to = "Cobertura") %>%
+  group_by(locality, strata, Categoria) %>%
+  summarise(Cobertura = mean(Cobertura, na.rm = TRUE),
+            Latitude = mean(Latitude, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Cobertura = ifelse(Cobertura < 0.5, NA, Cobertura))  # Convertir valores <0.5% en NA
+
+# Diccionario de nombres completos
+catami_nombres <- c(
+  "CRB" = "Cirripedios",
+  "MAA" = "Algas calcáreas",
+  "MAEC" = "Algas ramas gruesas",
+  "MAEN" = "Algas incrustantes",
+  "MAF" = "Algas filamentosas",
+  "MAG" = "Algas globosas",
+  "MAS" = "Algas hojas laminares finas",
+  "MOB" = "Bivalvos",
+  "MOG" = "Gasterópodos",
+  "SC" = "Suelo Desnudo",
+  "WPOT" = "Tubo poliqueto",
+  "MALCB" = "Algas formadoras de bosque"
+)
+
+# Reemplazar códigos por nombres completos
+AMP_heatmap <- AMP_heatmap %>%
+  mutate(Categoria = recode(Categoria, !!!catami_nombres))
+
+# Crear una estructura completa de localidades y estratos para garantizar que todas aparezcan
+localidades_completas <- expand_grid(
+  locality = unique(AMP$locality),
+  strata = factor(c("LOWTIDE", "MIDTIDE", "HIGHTIDE"), levels = c("LOWTIDE", "MIDTIDE", "HIGHTIDE")),
+  Categoria = unique(AMP_heatmap$Categoria)
+)
+
+# Unir con la estructura original para completar los datos faltantes
+AMP_heatmap <- localidades_completas %>%
+  left_join(AMP_heatmap, by = c("locality", "strata", "Categoria"))
+
+# Ordenar las localidades según la latitud promedio original
+orden_localidades <- AMP_heatmap %>%
+  group_by(locality) %>%
+  summarise(lat_media = mean(Latitude, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(lat_media)) %>%
+  pull(locality)
+
+# Aplicar orden a locality y strata
+AMP_heatmap <- AMP_heatmap %>%
+  mutate(locality = factor(locality, levels = orden_localidades),
+         strata = factor(strata, levels = c("LOWTIDE", "MIDTIDE", "HIGHTIDE")))
+
+# Graficar heatmaps asegurando ejes iguales en todos los paneles
+p <- ggplot(AMP_heatmap, aes(x = locality, y = strata, fill = Cobertura)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma", na.value = "white") + # NA en blanco
+  labs(title = "Cobertura (%) por Localidad y Estrato",
+       x = "Localidad", y = "Estrato", fill = "Cobertura (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.spacing = unit(1, "lines")) +
+  facet_wrap(~Categoria, scales = "fixed") # Misma escala en todos los paneles
+
+# Convertir el gráfico a interactivo
+library(plotly)
+ggplotly(p)
+
+```
+
+# Variables Esenciales (EOVs)
+
+```{r EOVs, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(forcats)  
+library(tidyverse)
+library(vegan)    
+library(igraph)   
+library(ggraph)   
+
+# Crear nuevas columnas para Macroalgae e Invertebrados
+AMP <- AMP %>%
+  mutate(
+    Macroalgae = rowSums(select(., c("MAA", "MAEC", "MAEF", "MAEN", "MAF", "MAG", "MALA", "MAS","MALCB")), na.rm = TRUE),
+    Invertebrados = rowSums(select(., c("CRB", "MOB", "MOG", "WPOT")), na.rm = TRUE)
+  )
+
+# Seleccionar columnas necesarias y calcular promedios por localidad y estrato
+AMP_heatmap <- AMP %>%
+  select(locality, strata, Latitude, Macroalgae, Invertebrados) %>%
+  pivot_longer(cols = -c(locality, strata, Latitude), names_to = "Categoria", values_to = "Cobertura") %>%
+  group_by(locality, strata, Categoria) %>%
+  summarise(
+    Cobertura = mean(Cobertura, na.rm = TRUE),
+    Latitude = mean(Latitude, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  filter(Cobertura > 0)  
+
+# Diccionario de nombres completos
+catami_nombres <- c(
+  "Macroalgae" = "Macroalgas",
+  "Invertebrados" = "Invertebrados"
+)
+
+# Reemplazar códigos por nombres completos
+AMP_heatmap <- AMP_heatmap %>%
+  mutate(Categoria = recode(Categoria, !!!catami_nombres)) 
+
+# Ordenar locality y strata
+AMP_heatmap <- AMP_heatmap %>%
+  mutate(locality = fct_reorder(locality, Latitude, .desc = TRUE),
+         strata = factor(strata, levels = c("LOWTIDE", "MIDTIDE", "HIGHTIDE")))
+
+# Graficar heatmaps en un solo panel con facet_wrap
+p <- ggplot(AMP_heatmap, aes(x = locality, y = strata, fill = Cobertura)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma", na.value = "white") +
+  labs(title = "EOVs (Essential Ocean Variables)", x = "Localidad", y = "Estrato", fill = "Cobertura (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), panel.spacing = unit(1, "lines")) +
+  facet_wrap(~Categoria, scales = "fixed")  # Divide en dos paneles dentro del mismo gráfico
+
+# Convertir a gráfico interactivo con ggplotly
+library(plotly)
+ggplotly(p)
+
+
+
+```
+
+# GRUPOS LOCALIDADES
+
 ```{r cluster, message=FALSE, warning=FALSE}
 # Cargar librerías necesarias
 library(dplyr)
@@ -591,7 +823,5 @@ p <- ggplot() +
 
 # 11. Convertir a gráfico interactivo
 ggplotly(p)
-
-  
 
 ```
