@@ -1,0 +1,627 @@
+---
+title: " Workshop 2025 results"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: lumen
+    source: embed
+    logo: logo.png
+    navbar:
+      - { title: "Protocolo Muestreo", icon: "ion-android-document", href: "https://repository.oceanbestpractices.org/handle/11329/2199.2", align: right }
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(ggplot2)
+library(plotly)
+library(spocc)
+library(readr)
+library(reshape2)
+library(leaflet)
+library(xts)
+library(dygraphs)
+library(plotly)
+library(lubridate)
+library(dplyr)
+library(htmltools)
+library(DT)
+library(shiny)
+library(xts)
+library(htmlwidgets)
+library(vegan)
+library(janitor)
+library(geosphere)
+library(purrr)
+library(RColorBrewer)
+palette(brewer.pal(8, "Set2"))
+
+
+```
+
+```{r dataread, message=FALSE, warning=FALSE, include=FALSE}
+#READ both files metadata and percent cover 
+
+# Suppress summaries info
+options(dplyr.summarise.inform = FALSE)
+
+# DATA
+## Data folder
+Data <- "WORKSHOP"
+
+library(readr)
+cover <- read_csv(file.path(Data, "percent_covers.csv"))#read cover data
+metadata <- read_csv(file.path(Data,"metadata.csv"))#read metadata
+
+#Merge photoquadrat.metadata and photoquadrat.cover
+AMP<- merge(metadata,cover, by.x = "Name", by.y ="Image name", all.x = TRUE) 
+
+
+#Remove original data frames from enviroment
+rm(cover)
+
+
+
+#all seaweed
+#AMP_original <- AMP
+#AMP$algae <- as.numeric(paste(AMP$MAA +AMP$MAEC + AMP$MAEF+ AMP$MAEN+ AMP$MAF+ AMP$MAG+ AMP$MALA+ AMP$MALCB+ AMP$MAS))
+
+
+#Create long type dataframe 
+library(reshape)
+AMP_long = melt(AMP, id.vars = 1:21, measure.vars = 22:ncol(AMP), variable_name = "CATAMI", value_name ="cover", na.rm = T)
+#rename columns because the ontop command is not working 
+colnames(AMP_long)[22] <- "CATAMI"
+colnames(AMP_long)[23] <- "cover"
+
+#Calculate mean, SD, SE for cover data by factors 
+library(doBy)
+Coverdata <- summaryBy(cover ~ CATAMI + strata,data=AMP_long, FUN = function(x) { c(mean = mean(x),SD=sd(x),SE = sqrt(var(x)/length(x)))})
+
+library(doBy)
+Coverdata_AMPs <- summaryBy(cover ~ CATAMI + strata +locality ,data=AMP_long, FUN = function(x) { c(mean = mean(x),SD=sd(x),SE = sqrt(var(x)/length(x)))})
+
+library(doBy)
+Coverdata_fotografos <- summaryBy(cover ~ CATAMI + strata +Photographer ,data=AMP_long, FUN = function(x) { c(mean = mean(x),SD=sd(x),SE = sqrt(var(x)/length(x)))})
+
+
+
+library(dplyr)
+library(lubridate)
+AMP <- AMP %>%
+  mutate(year = lubridate::year(Date))  %>%
+  mutate(month = lubridate::month(Date))  %>%
+  mutate(estacion = ifelse(month %in% c(12, 1, 2, 3, 4, 5), "Cálida", "Fría"))%>%
+  select(Name,Date, year,month,estacion,everything())
+
+photo_bydate = as.data.frame(table(AMP$year,AMP$site,AMP$locality,AMP$strata))
+colnames(photo_bydate)=c("Fecha","Sitio","Localidad","Estrato","n fotocuadrantes")  
+
+library(plotly)
+library(dplyr)
+library(cols4all)
+# Obtener las categorías únicas en la columna 'CATAMI'
+categorias_unicas <- unique(Coverdata_AMPs$CATAMI)
+num_categorias <- length(categorias_unicas)
+
+# Obtener una paleta de colores de cols4all con 18 colores
+paleta_cols4all <- c4a("poly.alphabet", 18)
+
+# Crear un vector de colores asignados a las categorías
+colores_categoria <- paleta_cols4all[match(Coverdata_AMPs$CATAMI, categorias_unicas)]
+
+# Asignar los colores al dataframe en una nueva columna llamada 'Color'
+Coverdata_AMPs$Color <- colores_categoria
+
+# Obtener las localidades únicas en la columna 'locality'
+localidades_unicas <- unique(Coverdata_AMPs$locality)
+
+
+# Definir el dataframe con los nombres actualizados
+nombres_actualizados <- recode(Coverdata_AMPs$CATAMI,
+                                "CNCA" = "Anémonas coloniales",
+                                "CNTR" = "Anémonas",
+                                "CRB" = "Cirripedios",
+                                "MOB" = "Bivalvos",
+                                "MOG" = "Gasterópodos",
+                                "SP" = "Esponja",
+                                "WPOT" = "Tubo poliqueto",
+                                "SC" = "Suelo Desnudo",
+                                "Unc" = "Sin definir",
+                                "MAA" = "Algas calcáreas",
+                                "MAEC" = "Algas ramas gruesas",
+                                "MAEF" = "Algas ramas finas",
+                                "MAEN" = "Algas incrustantes",
+                                "MAF" = "Algas filamentosas",
+                                "MAG" = "Algas globosas",
+                                "MALA" = "Algas laminares",
+                                "MALCB" = "Algas formadoras de bosque",
+                                "MAS" = "Algas hojas laminares finas")
+
+# Reemplazar la columna original con los nombres actualizados
+Coverdata_AMPs$CATAMI <- nombres_actualizados
+
+# Contar los valores únicos para cada columna
+num_countries <- length(unique(AMP$country))
+num_localities <- length(unique(AMP$locality))
+num_sites <- length(unique(AMP$site))
+num_years <- length(unique(AMP$year))
+num_fotocuadrantes <- length(unique(AMP$Name))
+metros_cuadrados <- round(num_fotocuadrantes * 0.0625)
+
+# Función para detectar linealidad en las transectas y añadir columna de advertencia
+check_strata_linearity <- function(data, threshold = 20) {
+  
+  # Filtrar datos con coordenadas válidas
+  data <- data %>%
+    filter(!is.na(Latitude), !is.na(Longitude))
+  
+  # Agrupar por sitio, fecha y estrato, asegurando que haya más de un fotocuadrante
+  data_grouped <- data %>%
+    group_by(site, Date, strata) %>%
+    filter(n() > 1) %>%
+    arrange(Longitude, Latitude) %>%
+    reframe(
+      site = first(site),
+      Date = first(Date),
+      strata = first(strata),
+      start_lon = first(Longitude),
+      start_lat = first(Latitude),
+      end_lon = last(Longitude),
+      end_lat = last(Latitude)
+    )
+  
+  # Calcular distancia entre extremos
+  data_grouped <- data_grouped %>%
+    mutate(
+      line_distance = distVincentySphere(
+        cbind(start_lon, start_lat), 
+        cbind(end_lon, end_lat)
+      ),
+      warning_flag = line_distance < threshold
+    )
+  
+  # Añadir columna de advertencia a `AMP`
+  data <- data %>%
+    left_join(data_grouped %>% select(site, Date, strata, line_distance, warning_flag), 
+              by = c("site", "Date", "strata")) %>%
+    mutate(warning_flag = ifelse(is.na(warning_flag), FALSE, warning_flag))
+  
+  return(data)
+}
+
+
+```
+
+# MAPA
+
+## Column {data-width="700"}
+
+### Sitios de muestreo
+
+```{r map, message=FALSE, warning=FALSE}
+library(leaflet)
+library(dplyr)
+
+# Crear una copia de AMP para el mapa
+AMP_map <- AMP
+
+# Aplicar la función de chequeo de linealidad
+AMP_map <- check_strata_linearity(AMP_map)
+
+# Crear una nueva columna 'tiempo' combinando year y estación
+AMP_map$tiempo <- paste(AMP_map$year, AMP_map$estacion, sep = "_")
+
+# Coordenadas del centro del mapa
+center_lat <- mean(AMP_map$Latitude, na.rm = TRUE)
+center_lng <- mean(AMP_map$Longitude, na.rm = TRUE)
+
+# Definir niveles esperados para los estratos
+niveles_strata <- c("HIGHTIDE", "MIDTIDE", "LOWTIDE")
+
+# Asegurar que los niveles sean consistentes y en mayúsculas
+AMP_map <- AMP_map %>%
+  mutate(strata = toupper(trimws(strata)),
+         strata = factor(strata, levels = niveles_strata))
+
+# Crear paleta de colores fija
+color_palette <- colorFactor(
+  palette = c("red", "blue", "green"),
+  domain = niveles_strata,
+  levels = niveles_strata
+)
+
+# Filtrar puntos con advertencias
+AMP_warning <- AMP_map %>% filter(warning_flag)
+
+# Crear el mapa base
+map <- leaflet(options = leafletOptions(zoomControl = TRUE,
+                                        zoomSnap = 0.25,
+                                        zoomDelta = 1)) %>%
+  addProviderTiles(providers$Esri.WorldImagery,
+                   options = providerTileOptions(maxNativeZoom = 19, maxZoom = 100),
+                   group = "Satelite") %>%
+  addProviderTiles(providers$Stadia.OSMBright,
+                   options = providerTileOptions(maxNativeZoom = 19, maxZoom = 100),
+                   group = "Mapa para zoom") %>%
+  addLayersControl(
+    baseGroups = c("Satelite", "Mapa para zoom"),
+    overlayGroups = c(unique(AMP_map$tiempo), "Advertencias"),
+    options = layersControlOptions(collapsed = FALSE),
+    position = "topleft"
+  ) %>%
+  setView(lng = center_lng, lat = center_lat, zoom = 4)
+
+# Añadir los puntos de cada tiempo
+for (tiempo in unique(AMP_map$tiempo)) {
+  map <- map %>%
+    addCircleMarkers(
+      data = AMP_map %>% filter(tiempo == !!tiempo),
+      ~Longitude,
+      ~Latitude,
+      weight = 0.5,
+      radius = 4,
+      fillOpacity = 0.5,
+      stroke = TRUE,
+      popup = ~paste("Strata:", strata, "<br>", "Name:", Name),
+      color = ~color_palette(strata),
+      fillColor = ~color_palette(strata),
+      group = as.character(tiempo)
+    )
+}
+
+# Añadir puntos con advertencia
+map <- map %>%
+  addCircleMarkers(
+    data = AMP_warning,
+    ~Longitude,
+    ~Latitude,
+    weight = 1,
+    radius = 6,
+    fillOpacity = 0.8,
+    stroke = TRUE,
+    popup = ~paste("Advertencia: Línea de muestreo < 20m<br>",
+                   "Distancia de línea: ", round(line_distance, 2), " metros<br>",
+                   "Site:", site, "<br>",
+                   "Strata:", strata, "<br>",
+                   "Fecha:", Date),
+    color = "orange",
+    fillColor = "orange",
+    group = "Advertencias"
+  )
+
+# Agregar leyenda y elementos extra
+map <- map %>%
+  addControl(html = "<div id='legend'>Estratos: <br>
+                     <i style='background: red'></i> ALTO <br>
+                     <i style='background: blue'></i> MEDIO <br>
+                     <i style='background: green'></i> BAJO <br>
+                     <i style='background: orange'></i> Advertencias </div>",
+             position = "bottomright") %>%
+  addScaleBar(position = "bottomleft", options = scaleBarOptions(metric = TRUE)) %>%
+  addMiniMap(tiles = providers$Esri.WorldStreetMap,
+             toggleDisplay = TRUE,
+             minimized = FALSE, position = "topright")
+
+# Mostrar el mapa
+map
+
+
+
+```
+
+## Column {data-width="300"}
+### FOTOS
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# Contar fotos por fotógrafo
+fotografos <- metadata %>%
+  count(Photographer) %>%
+  arrange(desc(n))  
+
+# Definir el límite de colores
+fotografos <- fotografos %>%
+  mutate(color = case_when(
+    n < 50  ~ "red",    # Menos de 50 fotos (Rojo)
+    n < 100 ~ "orange", # Entre 50 y 100 fotos (Amarillo)
+    TRUE    ~ "green"   # Más de 100 fotos (Verde)
+  ))
+
+# Crear el gráfico tipo "gauge"
+ggplot(fotografos, aes(x = Photographer, y = n, fill = color)) +
+  geom_col() +
+  scale_fill_identity() +  # Usa los colores definidos en la columna "color"
+  geom_hline(yintercept = 100, linetype = "dashed", color = "black") +  # Línea meta
+  labs(title = "Cantidad de Fotos por Fotógrafo",
+       x = "Fotógrafo", y = "Número de Fotos") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotar nombres
+
+```
+
+
+```{r include=FALSE}
+library(plotly)
+library(dplyr)
+
+# Obtener la lista de fotógrafos únicos
+fotografos_unicos <- unique(Coverdata_fotografos$Photographer)
+
+# Crear una lista para almacenar los gráficos
+plot_list <- list()
+
+# Generar una paleta de colores para las categorías CATAMI
+categorias_unicas <- unique(Coverdata_fotografos$CATAMI)
+colores <- RColorBrewer::brewer.pal(min(length(categorias_unicas), 9), "Set3")
+color_mapping <- setNames(rep(colores, length.out = length(categorias_unicas)), categorias_unicas)
+
+# Loop para generar gráficos por fotógrafo
+for (fotografo in fotografos_unicos) {
+  
+  # Filtrar datos para el fotógrafo actual
+  Coverdata_fotografo <- filter(Coverdata_fotografos, Photographer == fotografo)
+  
+  # Filtrar por estratos y eliminar la categoría "algae"
+  sel_data.L <- filter(Coverdata_fotografo, strata == "LOWTIDE", cover.mean > 0, CATAMI != "algae")
+  sel_data.M <- filter(Coverdata_fotografo, strata == "MIDTIDE", cover.mean > 0, CATAMI != "algae")
+  sel_data.H <- filter(Coverdata_fotografo, strata == "HIGHTIDE", cover.mean > 0, CATAMI != "algae")
+
+  # Asignar colores según CATAMI
+  sel_data.L$Color <- color_mapping[sel_data.L$CATAMI]
+  sel_data.M$Color <- color_mapping[sel_data.M$CATAMI]
+  sel_data.H$Color <- color_mapping[sel_data.H$CATAMI]
+
+  # Crear el gráfico de torta con tres subgráficos (uno por estrato)
+  p <- plot_ly(labels = ~CATAMI, values = ~cover.mean, legendgroup = ~CATAMI, textinfo = 'label+percent') %>%
+    add_pie(data = sel_data.L, name = "Bajo", title = 'Estrato Bajo', domain = list(row = 0, column = 0),
+            marker = list(colors = sel_data.L$Color)) %>%
+    add_pie(data = sel_data.M, name = "Medio", title = 'Estrato Medio', domain = list(row = 0, column = 1),
+            marker = list(colors = sel_data.M$Color)) %>%
+    add_pie(data = sel_data.H, name = "Alto", title = 'Estrato Alto', domain = list(row = 0, column = 2),
+            marker = list(colors = sel_data.H$Color)) %>%
+    layout(title = fotografo, showlegend = TRUE,
+           grid = list(rows = 1, columns = 3),
+           xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+           yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
+  
+  # Almacenar el gráfico en la lista con el nombre del fotógrafo como clave
+  plot_list[[fotografo]] <- p
+}
+
+# Mostrar un gráfico de la lista (ejemplo con el primer fotógrafo)
+plot_list[[fotografos_unicos[1]]]
+
+```
+
+# COBERTURA (%) ESPECIES
+
+## Column1 {.tabset .tabset-fade}
+
+### AGUSTO
+
+```{r}
+plot_list[["Agusto"]]
+```
+
+### Cesar
+
+```{r}
+plot_list[["Cesar"]]
+```
+
+### Lincey
+
+```{r}
+plot_list[["Lincey"]]
+```
+
+### Lincey
+
+```{r}
+plot_list[["La Daana"]]
+```
+
+
+# % fotografos
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Filtrar datos válidos y calcular la cobertura promedio por fotógrafo, nivel intermareal y categoría CATAMI
+Coverdata_fotografo <- Coverdata_fotografos %>%
+  filter(CATAMI != "algae", strata %in% c("MIDTIDE", "LOWTIDE")) %>%  # Excluir "algae" y seleccionar estratos
+  group_by(Photographer, strata, CATAMI) %>%
+  summarise(cover.mean = mean(cover.mean, na.rm = TRUE), .groups = "drop")
+
+# Seleccionar las 7 categorías CATAMI más representadas en total
+top_CATAMI <- Coverdata_fotografo %>%
+  group_by(CATAMI) %>%
+  summarise(total_cover = mean(cover.mean, na.rm = TRUE)) %>%
+  arrange(desc(total_cover)) %>%
+  slice_head(n = 7) %>%
+  pull(CATAMI)
+
+# Filtrar solo las principales categorías CATAMI
+Coverdata_fotografos <- Coverdata_fotografos %>%
+  filter(CATAMI %in% top_CATAMI)
+
+# Crear gráfico para MIDTIDE
+p_mid <- ggplot(filter(Coverdata_fotografos, strata == "MIDTIDE"), 
+                aes(x = Photographer, y = cover.mean, fill = CATAMI)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_viridis_d() +
+  labs(title = "Cobertura por Fotógrafo - MIDTIDE", x = "Fotógrafo", y = "Cobertura Promedio (%)", fill = "CATAMI") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Crear gráfico para LOWTIDE
+p_low <- ggplot(filter(Coverdata_fotografos, strata == "LOWTIDE"), 
+                aes(x = Photographer, y = cover.mean, fill = CATAMI)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_viridis_d() +
+  labs(title = "Cobertura por Fotógrafo - LOWTIDE", x = "Fotógrafo", y = "Cobertura Promedio (%)", fill = "CATAMI") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Mostrar los gráficos
+library(patchwork)
+p_mid / p_low  # Muestra los gráficos en vertical
+
+
+```
+
+# Boxplot fotografos
+```{r}
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+
+# 1. Filtrar datos válidos directamente desde AMP
+AMP_filtrado <- AMP_long %>%
+  filter(strata %in% c("MIDTIDE", "LOWTIDE"),
+         !is.na(CATAMI),
+         CATAMI != "algae",
+         !is.na(cover),
+         !is.na(Photographer))
+
+# 2. Seleccionar las 7 categorías CATAMI más representadas en promedio
+top_CATAMI <- AMP_filtrado %>%
+  group_by(CATAMI) %>%
+  summarise(mean_cover = mean(cover, na.rm = TRUE)) %>%
+  arrange(desc(mean_cover)) %>%
+  slice_head(n = 7) %>%
+  pull(CATAMI)
+
+# 3. Filtrar AMP solo con esas 7 categorías
+AMP_top <- AMP_filtrado %>%
+  filter(CATAMI %in% top_CATAMI) %>%
+  mutate(CATAMI = factor(CATAMI, levels = top_CATAMI))
+
+# 4. Calcular n para cada grupo (para los textos)
+labels_mid <- AMP_top %>%
+  filter(strata == "MIDTIDE") %>%
+  count(CATAMI, Photographer)
+
+labels_low <- AMP_top %>%
+  filter(strata == "LOWTIDE") %>%
+  count(CATAMI, Photographer)
+
+# 5. Boxplot para MIDTIDE
+p_mid <- ggplot(filter(AMP_top, strata == "MIDTIDE"),
+                aes(x = CATAMI, y = cover, fill = Photographer)) +
+  geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.3)) +
+  geom_text(data = labels_mid,
+            aes(x = CATAMI, y = -2, label = n, group = Photographer),
+            position = position_dodge2(width = 0.75),
+            size = 1.8, color = "black") +  # <- tamaño reducido acá
+  labs(title = "Cobertura por Categoría CATAMI - MIDTIDE",
+       x = "Categoría CATAMI", y = "Cobertura (%)", fill = "Fotógrafo") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 6. Boxplot para LOWTIDE
+p_low <- ggplot(filter(AMP_top, strata == "LOWTIDE"),
+                aes(x = CATAMI, y = cover, fill = Photographer)) +
+  geom_boxplot(position = position_dodge2(preserve = "single", padding = 0.3)) +
+  geom_text(data = labels_low,
+            aes(x = CATAMI, y = -2, label = n, group = Photographer),
+            position = position_dodge2(width = 0.75),
+            size = 1.8, color = "black") +  # <- tamaño reducido acá también
+  labs(title = "Cobertura por Categoría CATAMI - LOWTIDE",
+       x = "Categoría CATAMI", y = "Cobertura (%)", fill = "Fotógrafo") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 7. Mostrar ambos gráficos
+p_mid / p_low
+
+
+```
+
+
+# CATAMI
+
+```{r Heatmaps_all, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(forcats)
+library(tidyverse)
+
+# Lista de categorías CATAMI de interés
+catami_seleccion <- c("MAEN", "MAF", "CRB", "MAA", "MAEC", "MAG", "MAS", "MOB", "MOG", "SC", "WPOT", "MALCB")
+
+# Crear nueva columna sumando las macroalgas
+AMP <- AMP %>%
+  mutate(Macroalgae = rowSums(select(., c("MAA", "MAEC", "MAEF", "MAEN", "MAF", "MAG", "MALA", "MAS")), na.rm = TRUE))
+
+# Seleccionar columnas necesarias y calcular promedios por localidad y strata
+AMP_heatmap <- AMP %>%
+  select(locality, strata, Latitude, all_of(catami_seleccion)) %>%
+  pivot_longer(cols = -c(locality, strata, Latitude), names_to = "Categoria", values_to = "Cobertura") %>%
+  group_by(locality, strata, Categoria) %>%
+  summarise(Cobertura = mean(Cobertura, na.rm = TRUE),
+            Latitude = mean(Latitude, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Cobertura = ifelse(Cobertura < 0.5, NA, Cobertura))  # Convertir valores <0.5% en NA
+
+# Diccionario de nombres completos
+catami_nombres <- c(
+  "CRB" = "Cirripedios",
+  "MAA" = "Algas calcáreas",
+  "MAEC" = "Algas ramas gruesas",
+  "MAEN" = "Algas incrustantes",
+  "MAF" = "Algas filamentosas",
+  "MAG" = "Algas globosas",
+  "MAS" = "Algas hojas laminares finas",
+  "MOB" = "Bivalvos",
+  "MOG" = "Gasterópodos",
+  "SC" = "Suelo Desnudo",
+  "WPOT" = "Tubo poliqueto",
+  "MALCB" = "Algas formadoras de bosque"
+)
+
+
+# Reemplazar códigos por nombres completos
+AMP_heatmap <- AMP_heatmap %>%
+  mutate(Categoria = recode(Categoria, !!!catami_nombres))
+
+# Crear una estructura completa de localidades y estratos para garantizar que todas aparezcan
+localidades_completas <- expand_grid(
+  locality = unique(AMP$locality),
+  strata = factor(c("LOWTIDE", "MIDTIDE", "HIGHTIDE"), levels = c("LOWTIDE", "MIDTIDE", "HIGHTIDE")),
+  Categoria = unique(AMP_heatmap$Categoria)
+)
+
+# Unir con la estructura original para completar los datos faltantes
+AMP_heatmap <- localidades_completas %>%
+  left_join(AMP_heatmap, by = c("locality", "strata", "Categoria"))
+
+# Ordenar las localidades según la latitud promedio original
+orden_localidades <- AMP_heatmap %>%
+  group_by(locality) %>%
+  summarise(lat_media = mean(Latitude, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(lat_media)) %>%
+  pull(locality)
+
+# Aplicar orden a locality y strata
+AMP_heatmap <- AMP_heatmap %>%
+  mutate(locality = factor(locality, levels = orden_localidades),
+         strata = factor(strata, levels = c("LOWTIDE", "MIDTIDE", "HIGHTIDE")))
+
+# Graficar heatmaps asegurando ejes iguales en todos los paneles
+p <- ggplot(AMP_heatmap, aes(x = locality, y = strata, fill = Cobertura)) +
+  geom_tile() +
+  scale_fill_viridis_c(option = "plasma", na.value = "white") + # NA en blanco
+  labs(title = "Cobertura (%) por Localidad y Estrato",
+       x = "Localidad", y = "Estrato", fill = "Cobertura (%)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        panel.spacing = unit(1, "lines")) +
+  facet_wrap(~Categoria, scales = "fixed") # Misma escala en todos los paneles
+
+# Convertir el gráfico a interactivo
+library(plotly)
+ggplotly(p)
+
+```
+

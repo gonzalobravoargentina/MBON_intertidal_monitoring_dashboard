@@ -842,7 +842,7 @@ p_arg <- procesar_y_graficar(AMP, "ARGENTINA")
 p_arg
 ```
 
-### CHILE
+### CHILE   
 ```{r Heatmaps_chile, message=FALSE, warning=FALSE}
 p_chile <- procesar_y_graficar(AMP, "CHILE")
 
