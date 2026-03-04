@@ -1,0 +1,10 @@
+name: monitoreo-intermareal
+title:
+username: mbon-poletopole
+account: mbon-poletopole
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16797650
+bundleId:
+url: https://mbon-poletopole.shinyapps.io/monitoreo-intermareal/
+version: 1

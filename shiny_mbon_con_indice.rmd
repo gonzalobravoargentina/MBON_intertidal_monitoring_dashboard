@@ -1,0 +1,934 @@
+---
+title: "Monitoreo Intermareales Rocosos"
+output:
+  flexdashboard::flex_dashboard:
+    theme: lumen
+    source: embed
+    logo: logo.png
+    vertical_layout: fill
+    navbar:
+      - { title: "Protocolo Muestreo", icon: "ion-android-document", href: "https://repository.oceanbestpractices.org/handle/11329/2199.2", align: right }
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+# =========================
+# 0) Libraries
+# =========================
+library(flexdashboard)
+library(shiny)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(lubridate)
+library(leaflet)
+library(plotly)
+library(ggplot2)
+library(DT)
+library(RColorBrewer)
+library(scales)
+
+options(dplyr.summarise.inform = FALSE)
+```
+
+```{r dataread, include=FALSE, message=FALSE, warning=FALSE}
+# =========================
+# 1) Data loading
+# =========================
+Data <- "DATA"
+
+# CoralNet exports
+cover    <- read_csv(file.path(Data, "percent_covers.csv"), show_col_types = FALSE)
+metadata <- read_csv(file.path(Data, "metadata.csv"), show_col_types = FALSE)
+
+# Merge metadata + cover
+AMP <- merge(metadata, cover, by.x = "Name", by.y = "Image name", all.x = TRUE)
+
+# Ensure Date exists and is Date type
+AMP <- AMP %>%
+  mutate(
+    Date = as.Date(Date),
+    year = year(Date),
+    month = month(Date),
+    estacion = ifelse(month %in% c(12, 1, 2, 3, 4, 5), "Cálida", "Fría")
+  )
+
+# CATAMI categories to plot (use only those that exist in AMP)
+catami_seleccion <- c("MAEN","MAF","CRB","MAA","MAEC","MAS","MOB","MOG","SC","WPOT")
+catami_seleccion <- catami_seleccion[catami_seleccion %in% names(AMP)]
+
+# Available localities & years
+localidades <- sort(unique(AMP$locality))
+anios <- sort(unique(AMP$year))
+
+# Diccionario CATAMI (códigos -> nombres en español)
+catami_dicc <- c(
+  "CNCA"  = "Anémonas coloniales",
+  "CNTR"  = "Anémonas",
+  "CRB"   = "Cirripedios",
+  "MOB"   = "Bivalvos",
+  "MOG"   = "Gasterópodos",
+  "SP"    = "Esponja",
+  "WPOT"  = "Tubo poliqueto",
+  "SC"    = "Suelo Desnudo",
+  "Unc"   = "Sin definir",
+  "MAA"   = "Algas calcáreas",
+  "MAEC"  = "Algas ramas gruesas",
+  "MAEF"  = "Algas ramas finas",
+  "MAEN"  = "Algas incrustantes",
+  "MAF"   = "Algas filamentosas",
+  "MAG"   = "Algas globosas",
+  "MALA"  = "Algas laminares",
+  "MALCB" = "Algas formadoras de bosque",
+  "MAS"   = "Algas hojas laminares finas"
+)
+
+# Etiquetas de leyenda (NOMBRE COMPLETO) en el MISMO orden de catami_seleccion
+labels_catami <- catami_dicc[catami_seleccion]
+names(labels_catami) <- catami_seleccion
+labels_catami[is.na(labels_catami)] <- names(labels_catami)[is.na(labels_catami)]
+```
+
+```{r arg_index_params, include=FALSE}
+# ============================================================
+# ARG-RI-EBQI (Argentine Rocky Intertidal Ecosystem-Based Quality Index)
+# *Implementación para el dashboard*
+# - Se calcula SOLO para el intermareal medio (MIDTIDE)
+# - Funciona con las mismas columnas CATAMI (MOB, MAS, MAF, SC)
+# - Se resume por Localidad (ALL) o por Sitio (si se selecciona localidad)
+# ============================================================
+
+# Weights for the state components (relative importance)
+W_core <- c(BIO = 24, MAF = 12, SC = 15)
+
+# Contribution of macroalgae to BIO relative to MOB
+mas_factor <- 0.6
+
+# Moderate penalty rule threshold:
+MOB_threshold <- 5
+
+# Normalizer (maximum possible weighted score):
+Wsum4_core <- sum(W_core) * 4
+
+# Bare-substrate override parameters
+SC_bare_threshold    <- 85
+MOB_exception_thr    <- 10
+ARG_RI_EBQI_bare_cap <- 2.0
+
+# Scoring functions (0–4)
+S_bio_fun <- function(bio) {
+  case_when(
+    is.na(bio) ~ NA_real_,
+    bio > 50   ~ 4,
+    bio >= 25  ~ 3,
+    bio >= 10  ~ 2,
+    bio >= 1   ~ 1,
+    TRUE       ~ 0
+  )
+}
+
+S_inv_fun <- function(x) {
+  case_when(
+    is.na(x) ~ NA_real_,
+    x <= 5   ~ 4,
+    x <= 15  ~ 3,
+    x <= 30  ~ 2,
+    x <= 60  ~ 1,
+    TRUE     ~ 0
+  )
+}
+
+classify_ARG_RI_EBQI <- function(x) {
+  case_when(
+    is.na(x) ~ NA_character_,
+    x >= 7.5 ~ "High",
+    x >= 6.0 ~ "Good",
+    x >= 4.5 ~ "Moderate",
+    x >= 3.5 ~ "Poor",
+    TRUE     ~ "Bad"
+  )
+}
+
+ARG_levels <- c("High", "Good", "Moderate", "Poor", "Bad")
+
+class_cols <- c(
+  "Bad"      = "#B71C1C",
+  "Poor"     = "#FB8C00",
+  "Moderate" = "#FDD835",
+  "Good"     = "#66C2A5",
+  "High"     = "#3B7EA1"
+)
+```
+
+# Filtros {.sidebar}
+
+```{r}
+selectInput(
+  inputId = "sel_localidad",
+  label   = "Parque / Localidad",
+  choices = c("Todos" = "ALL", localidades),
+  selected = "ALL"
+)
+
+selectInput(
+  inputId = "sel_year",
+  label   = "Año",
+  choices = c("Todos" = "ALL", anios),
+  selected = "ALL"
+)
+
+selectInput(
+  inputId = "sel_estacion",
+  label   = "Estación",
+  choices = c("Todas" = "ALL", "Cálida" = "Cálida", "Fría" = "Fría"),
+  selected = "ALL"
+)
+```
+
+```{r reactives, include=FALSE}
+# =========================
+# 3) Reactives (data pipeline)
+# =========================
+AMP_filtrado <- reactive({
+  df <- AMP
+
+  if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
+    df <- df %>% filter(locality == input$sel_localidad)
+  }
+
+  if (!is.null(input$sel_year) && input$sel_year != "ALL") {
+    df <- df %>% filter(year == as.integer(input$sel_year))
+  }
+
+  if (!is.null(input$sel_estacion) && input$sel_estacion != "ALL") {
+    df <- df %>% filter(estacion == input$sel_estacion)
+  }
+
+  df
+})
+
+cover_resumen <- reactive({
+  df <- AMP_filtrado()
+  req(nrow(df) > 0)
+  req(length(catami_seleccion) > 0)
+
+  # Definir variable de eje X según filtro
+  x_var <- if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
+    "site"
+  } else {
+    "locality"
+  }
+
+  df_long <- df %>%
+    select(locality, site, Latitude, strata, estacion, all_of(catami_seleccion)) %>%
+    pivot_longer(
+      cols = all_of(catami_seleccion),
+      names_to = "CATAMI",
+      values_to = "Cobertura"
+    ) %>%
+    mutate(
+      CATAMI = recode(CATAMI, !!!catami_dicc),
+      CATAMI = ifelse(is.na(CATAMI), as.character(CATAMI), CATAMI)
+    ) %>%
+    group_by(across(all_of(c(x_var, "locality", "strata", "estacion", "CATAMI")))) %>%
+    summarise(
+      Cobertura = mean(Cobertura, na.rm = TRUE),
+      Latitude  = mean(Latitude, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    filter(Cobertura > 0)
+
+  # 🔹 ORDEN NORTE → SUR SOLO PARA LOCALIDADES
+  if (x_var == "locality") {
+    df_long <- df_long %>%
+      mutate(
+        eje_x = forcats::fct_reorder(locality, Latitude, .desc = TRUE)
+      )
+  } else {
+    df_long <- df_long %>%
+      mutate(eje_x = site)
+  }
+
+  df_long %>%
+    mutate(
+      strata = factor(
+        strata,
+        levels = c("HIGHTIDE", "MIDTIDE", "LOWTIDE"),
+        labels = c("Intermareal alto", "Intermareal medio", "Intermareal bajo")
+      ),
+      estacion = factor(estacion, levels = c("Cálida", "Fría"))
+    )
+})
+
+colores_catami <- reactive({
+  req(length(catami_seleccion) > 0)
+
+  # Nombres completos (en el mismo orden de catami_seleccion)
+  catami_nombres <- catami_dicc[catami_seleccion]
+  catami_nombres[is.na(catami_nombres)] <- catami_seleccion[is.na(catami_nombres)]  # fallback
+
+  # Paleta más contrastante (Paired)
+  cols <- brewer.pal(n = max(3, length(catami_nombres)), name = "Paired")[seq_along(catami_nombres)]
+
+  # nombrar por NOMBRE COMPLETO (porque fill = CATAMI son nombres)
+  setNames(cols, catami_nombres)
+})
+
+# ============================================================
+# ARG-RI-EBQI: cálculo por foto (MIDTIDE) + resumen para mapa
+# ============================================================
+
+AMP_index <- reactive({
+  df <- AMP_filtrado()
+  req(nrow(df) > 0)
+
+  # Requiere columnas mínimas
+  req(all(c("strata", "MOB", "MAS", "MAF", "SC") %in% names(df)))
+
+  df %>%
+    mutate(
+      strata = toupper(as.character(strata))
+    ) %>%
+    filter(strata == "MIDTIDE") %>%
+    mutate(
+      MOB = as.numeric(MOB),
+      MAS = as.numeric(MAS),
+      MAF = as.numeric(MAF),
+      SC  = as.numeric(SC),
+
+      MAS_MAF_group = coalesce(MAS, 0) + coalesce(MAF, 0),
+      BIO = pmin(100, coalesce(MOB, 0) + mas_factor * MAS_MAF_group),
+
+      S_BIO = if_else(
+        (MAS_MAF_group > 0) & (coalesce(MOB, 0) < MOB_threshold),
+        1,
+        S_bio_fun(BIO)
+      ),
+
+      S_MAF = S_inv_fun(MAF),
+      S_SC  = S_inv_fun(SC),
+
+      num = W_core["BIO"] * S_BIO +
+        W_core["MAF"] * S_MAF +
+        W_core["SC"]  * S_SC,
+
+      ARG_RI_EBQI_raw = (num / Wsum4_core) * 10,
+
+      ARG_RI_EBQI = if_else(
+        (coalesce(SC, 0) >= SC_bare_threshold) & (coalesce(MOB, 0) < MOB_exception_thr),
+        pmin(ARG_RI_EBQI_raw, ARG_RI_EBQI_bare_cap),
+        ARG_RI_EBQI_raw
+      ),
+
+      ARG_RI_EBQI_class = classify_ARG_RI_EBQI(ARG_RI_EBQI),
+      ARG_RI_EBQI_class = factor(ARG_RI_EBQI_class, levels = ARG_levels, ordered = TRUE)
+    )
+})
+
+indice_resumen_mapa <- reactive({
+  df <- AMP_index()
+  req(nrow(df) > 0)
+
+  # Solo coordenadas válidas
+  df <- df %>% filter(!is.na(Latitude), !is.na(Longitude))
+
+  # Modo: ALL -> localidad, si no -> sitio
+  if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
+    df %>%
+      group_by(locality, site) %>%
+      summarise(
+        lon = mean(as.numeric(Longitude), na.rm = TRUE),
+        lat = mean(as.numeric(Latitude),  na.rm = TRUE),
+        ARG_RI_EBQI_mean = mean(ARG_RI_EBQI, na.rm = TRUE),
+        n_fotos = n(),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        ARG_RI_EBQI_class = classify_ARG_RI_EBQI(ARG_RI_EBQI_mean),
+        ARG_RI_EBQI_class = factor(ARG_RI_EBQI_class, levels = ARG_levels, ordered = TRUE),
+        etiqueta = site
+      )
+  } else {
+    df %>%
+      group_by(locality) %>%
+      summarise(
+        lon = mean(as.numeric(Longitude), na.rm = TRUE),
+        lat = mean(as.numeric(Latitude),  na.rm = TRUE),
+        ARG_RI_EBQI_mean = mean(ARG_RI_EBQI, na.rm = TRUE),
+        n_fotos = n(),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        ARG_RI_EBQI_class = classify_ARG_RI_EBQI(ARG_RI_EBQI_mean),
+        ARG_RI_EBQI_class = factor(ARG_RI_EBQI_class, levels = ARG_levels, ordered = TRUE),
+        etiqueta = locality
+      )
+  }
+})
+
+#build CoralNet URL for selected locality (MIDTIDE)
+build_coralnet_url <- function(locality) {
+  base <- "https://coralnet.ucsd.edu/source/2897/browse/images/?aux3="
+  
+  # CoralNet expects spaces as "+"
+  loc_plus <- gsub(" ", "+", locality)
+  
+  paste0(base, loc_plus, "&aux5=MIDTIDE")
+}
+
+# Link dinámico a CoralNet (todas las imágenes por localidad)
+coralnet_link <- reactive({
+  if (is.null(input$sel_localidad) || input$sel_localidad == "ALL") {
+    return(NULL)
+  }
+
+  # Reemplazar espacios por "+"
+  loc_encoded <- gsub(" ", "+", input$sel_localidad)
+
+  paste0(
+    "https://coralnet.ucsd.edu/source/2897/browse/images/?aux3=",
+    loc_encoded
+  )
+})
+
+indice_filtrado <- reactive({
+  df <- AMP_index
+
+  # Filtro por localidad (si aplica)
+  if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
+    df <- df %>% filter(locality == input$sel_localidad)
+  }
+
+  # Filtro por año (si aplica)
+  if (!is.null(input$sel_year) && input$sel_year != "ALL") {
+    df <- df %>% filter(Year == as.integer(input$sel_year))
+  }
+
+  # Filtro por estación (si aplica)
+  # OJO: en tu índice usás Season (WARM/COLD) vs estacion (Cálida/Fría)
+  # Ajustá según cómo quedó AMP_index:
+  if (!is.null(input$sel_estacion) && input$sel_estacion != "ALL") {
+    # Si AMP_index tiene Season como "WARM"/"COLD", traducí:
+    season_map <- c("Cálida" = "WARM", "Fría" = "COLD")
+    df <- df %>% filter(Season == season_map[[input$sel_estacion]])
+  }
+
+  df
+})
+
+# ============================================================
+# Conteo de fotocuadrantes por clase del índice (Bad..High)
+# - ALL: por localidad
+# - Localidad seleccionada: por sitio
+# ============================================================
+conteo_indice_clases <- reactive({
+  df <- AMP_index()
+  req(nrow(df) > 0)
+  req("ARG_RI_EBQI_class" %in% names(df))
+
+  # asegurar orden fijo
+  df <- df %>%
+    mutate(
+      ARG_RI_EBQI_class = factor(as.character(ARG_RI_EBQI_class),
+                                 levels = ARG_levels, ordered = TRUE)
+    )
+
+  if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
+    # por sitio dentro de la localidad
+    out <- df %>%
+      count(locality, site, ARG_RI_EBQI_class, name = "n_fotos") %>%
+      mutate(etiqueta = site)
+  } else {
+    # por localidad
+    out <- df %>%
+      count(locality, ARG_RI_EBQI_class, name = "n_fotos") %>%
+      mutate(etiqueta = locality)
+  }
+
+  out %>%
+    filter(!is.na(ARG_RI_EBQI_class)) %>%
+    mutate(
+      etiqueta = forcats::fct_reorder(etiqueta, n_fotos, .fun = sum, .desc = TRUE)
+    )
+})
+
+```
+
+# MAPA|CATAMI 
+
+## Column {data-width=4}
+
+### Mapa de sitios de muestreo
+
+```{r}
+leafletOutput("mapa", height = 480)
+```
+
+```{r, include=FALSE}
+output$mapa <- renderLeaflet({
+  df <- AMP_filtrado()
+  req(nrow(df) > 0)
+  req(all(c("Latitude", "Longitude") %in% names(df)))
+
+  # Limpiar NAs de coordenadas
+  df <- df %>% filter(!is.na(Latitude), !is.na(Longitude))
+  req(nrow(df) > 0)
+
+  pal_strata <- colorFactor(
+    palette = c("red", "blue", "green"),
+    domain = c("HIGHTIDE", "MIDTIDE", "LOWTIDE")
+  )
+
+  # Mapa base
+  m <- leaflet(df, options = leafletOptions(zoomSnap = 0.25)) %>%
+    addProviderTiles(providers$Esri.WorldImagery, group = "Satélite") %>%
+    addProviderTiles(providers$Stadia.OSMBright, group = "Mapa") %>%
+    addCircleMarkers(
+      lng = ~Longitude, lat = ~Latitude,
+      radius = 4, weight = 0.7, fillOpacity = 0.7,
+      color = ~pal_strata(strata),
+      popup = ~paste0(
+        "<b>Localidad:</b> ", locality,
+        "<br><b>Sitio:</b> ", site,
+        "<br><b>Estrato:</b> ", strata,
+        "<br><b>Fecha:</b> ", Date,
+        "<br><b>Foto:</b> ", Name
+      )
+    ) %>%
+    addLegend("bottomright", pal = pal_strata, values = ~strata, title = "Estrato") %>%
+    addLayersControl(
+      baseGroups = c("Satélite", "Mapa"),
+      options = layersControlOptions(collapsed = FALSE)
+    )
+
+  # Zoom dinámico según filtro de localidad
+  if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
+
+    lng_min <- min(df$Longitude, na.rm = TRUE)
+    lng_max <- max(df$Longitude, na.rm = TRUE)
+    lat_min <- min(df$Latitude,  na.rm = TRUE)
+    lat_max <- max(df$Latitude,  na.rm = TRUE)
+
+    if (lng_min == lng_max || lat_min == lat_max) {
+      m <- m %>% setView(lng = mean(df$Longitude), lat = mean(df$Latitude), zoom = 12)
+    } else {
+      m <- m %>% fitBounds(lng1 = lng_min, lat1 = lat_min, lng2 = lng_max, lat2 = lat_max)
+    }
+
+  } else {
+    center_lat <- mean(df$Latitude, na.rm = TRUE)
+    center_lng <- mean(df$Longitude, na.rm = TRUE)
+    m <- m %>% setView(lng = center_lng, lat = center_lat, zoom = 5)
+  }
+
+  m
+})
+```
+
+
+## Column {data-width=8}
+
+### Cobertura media por categorías CATAMI
+
+**[CATAMI](https://catami.org/)** es una clasificación estandarizada utilizada para las principales especies del intermareal rocoso (algas, invertebrados y sustrato). Sus categorías se basan principalmente en características visuales observables en las fotografías, más que en una identificación taxonómica detallada, lo que facilita el análisis automatizado mediante inteligencia artificial.
+
+```{r}
+plotlyOutput("barras_catami", height = 480)
+```
+
+```{r, include=FALSE}
+output$barras_catami <- renderPlotly({
+  df_cov <- cover_resumen()
+  req(nrow(df_cov) > 0)
+
+  x_label <- if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") "Sitio" else "Localidad"
+
+  p <- ggplot(df_cov, aes(x = eje_x, y = Cobertura, fill = CATAMI)) +
+    geom_col() +
+    facet_grid(estacion ~ strata) +
+    scale_fill_manual(values = colores_catami(), guide = "none") +
+    labs(
+      x = x_label,
+      y = "Cobertura media (%)"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1)
+    )
+
+  ggplotly(p)
+})
+```
+
+# Índice ARG-RI-EBQI
+
+**ARG-RI-EBQI** (Argentine Rocky Intertidal Ecosystem-Based Quality Index) evalúa la condición del intermareal medio combinando cobertura de mejillones, algas y sustrato desnudo. Valores más altos indican mejor estado ecológico.
+El mapa muestra el valor promedio por localidad o sitio, mientras que el gráfico resume la cantidad de fotocuadrantes en cada categoría: High (≥ 7.5), Good (6.0–7.49), Moderate (4.5–5.99), Poor (3.5–4.49) y Bad (< 3.5).
+
+```{r, include=FALSE}
+output$btn_coralnet <- renderUI({
+  req(input$sel_localidad)
+
+  if (input$sel_localidad == "ALL") {
+    return(tags$small("Seleccioná una localidad para habilitar el acceso a fotos en CoralNet."))
+  }
+
+  url <- build_coralnet_url(input$sel_localidad)
+
+  tags$a(
+    href = url,
+    target = "_blank",
+    class = "btn btn-xs btn-primary",
+    style = "padding:4px 8px; font-size:12px; margin-top:6px; display:inline-block;",
+    paste0("Ver fotos MIDTIDE en CoralNet: ", input$sel_localidad)
+  )
+})
+```
+
+```{r}
+uiOutput("btn_coralnet")
+```
+
+
+## Column {data-width=6}
+
+### Estado ecológico (ARG-RI-EBQI) — mapa interactivo
+
+```{r}
+leafletOutput("mapa_indice", height = 650)
+```
+
+```{r, include=FALSE}
+output$mapa_indice <- renderLeaflet({
+  pts <- indice_resumen_mapa()
+  req(nrow(pts) > 0)
+
+  # radio por valor del índice (0–10)
+  pts <- pts %>%
+    mutate(
+      radius = rescale(ARG_RI_EBQI_mean, to = c(5, 18), from = c(0, 10))
+    )
+
+  pal_class <- colorFactor(
+    palette = unname(class_cols[ARG_levels]),
+    domain  = ARG_levels,
+    ordered = TRUE
+  )
+
+  # Extensión automática del mapa
+  lng_min <- min(pts$lon, na.rm = TRUE)
+  lng_max <- max(pts$lon, na.rm = TRUE)
+  lat_min <- min(pts$lat, na.rm = TRUE)
+  lat_max <- max(pts$lat, na.rm = TRUE)
+
+  titulo_popup <- if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") "Sitio" else "Localidad"
+
+  m <- leaflet(pts, options = leafletOptions(zoomSnap = 0.25)) %>%
+    addProviderTiles(providers$Esri.WorldImagery, group = "Satélite") %>%
+    addProviderTiles(providers$Stadia.OSMBright, group = "Mapa") %>%
+    addCircleMarkers(
+      lng = ~lon, lat = ~lat,
+      radius = ~radius,
+      weight = 0.8,
+      color = "black",
+      fillColor = ~pal_class(as.character(ARG_RI_EBQI_class)),
+      fillOpacity = 0.85,
+      popup = ~paste0(
+        "<b>", titulo_popup, ":</b> ", etiqueta,
+        ifelse(titulo_popup == "Sitio", paste0("<br><b>Localidad:</b> ", locality), ""),
+        "<br><b>ARG-RI-EBQI (promedio):</b> ", round(ARG_RI_EBQI_mean, 2),
+        "<br><b>Clase:</b> ", as.character(ARG_RI_EBQI_class),
+        "<br><b>Fotos (MIDTIDE):</b> ", n_fotos
+      )
+    ) %>%
+    addLegend(
+      position = "bottomright",
+      pal = pal_class,
+      values = ~ARG_RI_EBQI_class,
+      title = "Clase (ARG-RI-EBQI)",
+      opacity = 1
+    ) %>%
+    addLayersControl(
+      baseGroups = c("Satélite", "Mapa"),
+      options = layersControlOptions(collapsed = FALSE)
+    )
+
+  # zoom al bounding box
+  if (lng_min == lng_max || lat_min == lat_max) {
+    m <- m %>% setView(lng = mean(pts$lon), lat = mean(pts$lat), zoom = 10)
+  } else {
+    m <- m %>% fitBounds(lng1 = lng_min, lat1 = lat_min, lng2 = lng_max, lat2 = lat_max)
+  }
+
+  m
+})
+```
+
+## Column {data-width=6}
+
+### Fotocuadrantes por clase del índice
+```{r}
+plotlyOutput("barras_indice_clases", height = 450)
+```
+
+```{r include=FALSE}
+output$barras_indice_clases <- renderPlotly({
+  dfc <- conteo_indice_clases()
+  req(nrow(dfc) > 0)
+
+  etiqueta_y <- if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") "Sitio" else "Localidad"
+
+  p <- ggplot(dfc, aes(x = etiqueta, y = n_fotos, fill = ARG_RI_EBQI_class)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    scale_fill_manual(values = class_cols, drop = FALSE) +
+    labs(
+      x = etiqueta_y,
+      y = "N° fotocuadrantes (MIDTIDE)",
+      fill = "Clase ARG-RI-EBQI"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "top",
+      legend.title = element_text(face = "bold")
+    )
+
+  ggplotly(p)
+})
+```
+
+# Fotocuadrantes
+
+```{r fotocuadrantes_helpers, include=FALSE}
+library(scales)
+
+# Área por foto (25 x 25 cm = 0.0625 m²)
+area_por_foto_m2 <- 0.0625
+
+# Serie temporal (diaria) para acumulación
+muestreo_tiempo <- reactive({
+  df <- AMP_filtrado()
+  req(nrow(df) > 0)
+  req("Date" %in% names(df))
+
+  df <- df %>% filter(!is.na(Date))
+  req(nrow(df) > 0)
+
+  df %>%
+    count(Date, name = "n_fotos") %>%
+    arrange(Date) %>%
+    mutate(
+      fotos_acum = cumsum(n_fotos),
+      area_m2_acum = fotos_acum * area_por_foto_m2
+    )
+})
+
+# KPIs filtrados
+resumen_muestreo <- reactive({
+  df <- AMP_filtrado()
+  req(nrow(df) > 0)
+
+  df <- df %>% mutate(Date = as.Date(Date))
+
+  n_fotos <- nrow(df)
+  area_m2 <- n_fotos * area_por_foto_m2
+  n_dias <- dplyr::n_distinct(df$Date[!is.na(df$Date)])
+  n_localidades <- dplyr::n_distinct(df$locality)
+  n_sitios <- dplyr::n_distinct(df$site)
+
+  list(
+    n_fotos = n_fotos,
+    area_m2 = area_m2,
+    n_dias = n_dias,
+    n_localidades = n_localidades,
+    n_sitios = n_sitios
+  )
+})
+
+# Resumen por Año x Estación (para barras)
+fotos_por_anio_estacion <- reactive({
+  df <- AMP_filtrado()
+  req(nrow(df) > 0)
+
+  df %>%
+    filter(!is.na(year), !is.na(estacion)) %>%
+    count(year, estacion, name = "n_fotos") %>%
+    arrange(year, estacion)
+})
+
+# Tabla (totales + desglose por localidad/sitio)
+tabla_totales <- reactive({
+  df <- AMP_filtrado()
+  req(nrow(df) > 0)
+
+  df <- df %>% mutate(Date = as.Date(Date))
+
+  df %>%
+    group_by(locality, site) %>%
+    summarise(
+      fotos = n(),
+      dias = n_distinct(Date[!is.na(Date)]),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(fotos))
+})
+```
+
+## Row {data-height=120}
+
+### Fotocuadrantes (filtrados)
+
+```{r include=FALSE}
+output$vb_fotos <- renderValueBox({
+  r <- resumen_muestreo()
+  valueBox(
+    format(r$n_fotos, big.mark = ".", decimal.mark = ","),
+    "Fotocuadrantes",
+    icon = "ion-android-camera",
+    color = "primary"
+  )
+})
+
+output$vb_area <- renderValueBox({
+  r <- resumen_muestreo()
+  valueBox(
+    paste0(format(round(r$area_m2, 1), big.mark = ".", decimal.mark = ","), " m²"),
+    "Área equivalente (25×25 cm por foto)",
+    icon = "ion-android-map",
+    color = "info"
+  )
+})
+
+output$vb_dias <- renderValueBox({
+  r <- resumen_muestreo()
+  valueBox(
+    format(r$n_dias, big.mark = ".", decimal.mark = ","),
+    "Días con muestreo",
+    icon = "ion-android-time",
+    color = "warning"
+  )
+})
+
+output$vb_espacial <- renderValueBox({
+  r <- resumen_muestreo()
+  valueBox(
+    paste0(r$n_localidades, " localidades / ", r$n_sitios, " sitios"),
+    "Cobertura espacial",
+    icon = "ion-android-pin",
+    color = "success"
+  )
+})
+
+output$vb_coralnet <- renderValueBox({
+
+  link <- coralnet_link()
+
+  if (is.null(link)) {
+    valueBox(
+      "Seleccionar una localidad",
+      "Fotocuadrantes",
+      icon  = "ion-android-camera",
+      color = "info"   # ✅ válido
+    )
+  } else {
+    valueBox(
+      HTML(paste0(
+        "<a href='", link, "' target='_blank'>",
+        "Ver imágenes en CoralNet",
+        "</a>"
+      )),
+      paste0("Fotocuadrantes – ", input$sel_localidad),
+      icon  = "ion-android-camera",
+      color = "success"
+    )
+  }
+})
+```
+
+```{r}
+valueBoxOutput("vb_fotos")
+```
+
+### Área equivalente (m²)
+```{r}
+valueBoxOutput("vb_area")
+```
+
+### Días de trabajo
+```{r}
+valueBoxOutput("vb_dias")
+```
+
+### Cobertura espacial
+```{r}
+valueBoxOutput("vb_espacial")
+```
+
+### Link a fotos
+```{r}
+valueBoxOutput("vb_coralnet")
+```
+
+
+## Row {data-height=520}
+
+### Esfuerzo por año y estación
+```{r}
+plotlyOutput("plot_anio_estacion", height = 480)
+```
+
+```{r echo=FALSE}
+output$plot_anio_estacion <- renderPlotly({
+  df <- fotos_por_anio_estacion()
+  req(nrow(df) > 0)
+
+  p <- ggplot(df, aes(x = factor(year), y = n_fotos, fill = estacion)) +
+    geom_col(position = "dodge") +
+    labs(x = "Año", y = "Cantidad de fotocuadrantes", fill = "Estación") +
+    theme_minimal(base_size = 12)
+
+  ggplotly(p)
+})
+```
+
+
+
+# Información
+
+### Sobre este dashboard
+Este dashboard fue desarrollado como parte del trabajo de investigación y monitoreo de ecosistemas intermareales rocosos en la costa patagónica argentina, en el marco de la red **Marine Biodiversity Observation Network (MBON) Pole to Pole**. El análisis integra fotocuadrantes intermareales procesados mediante herramientas de **inteligencia artificial**, permitiendo la visualización dinámica de patrones espaciales, temporales y ecológicos asociados a la biodiversidad bentónica. Los agentes de conservación de **Parques Nacionales** y de **reservas provinciales** son un componente fundamental de esta red, participando activamente en el diseño del monitoreo y en la recolección sistemática de los fotocuadrantes que sustentan los análisis presentados en este dashboard.
+
+Este trabajo se enmarca en el **proyecto de posdoctorado** del:
+
+**Dr. Gonzalo Bravo**  
+*Implementación de herramientas de inteligencia artificial para el monitoreo de la biodiversidad marina en áreas protegidas*
+
+Director: Dr. Gregorio Bigatti  
+Co-director: Dr. Enrique Montes Herrera  
+
+El proyecto se desarrolla en articulación con instituciones científicas del **CONICET** y administraciones de **Áreas Naturales Protegidas**, en el contexto de iniciativas regionales e internacionales de monitoreo a largo plazo.
+
+#### Publicaciones y protocolo
+Los resultados de los workshops fueron publicados en *Research Ideas and Outcomes (RIO Journal)*:
+
+- [MBON Intertidal Monitoring Workshop 2024](https://riojournal.com/article/126660/)
+- [MBON Intertidal Monitoring Workshop 2025](https://riojournal.com/article/163815/)
+
+El protocolo oficial de muestreo está disponible en el repositorio de *Ocean Best Practices (IOC-UNESCO)*:
+
+- [Intertidal Monitoring Protocol – MBON Pole to Pole](https://repository.oceanbestpractices.org/handle/11329/2199.2)
+
+#### Red MBON
+Los datos y metodologías presentados forman parte de la red internacional **MBON – Pole to Pole**, orientada a la observación estandarizada de la biodiversidad marina a escala regional y global.
+
+🔗 **Más información sobre MBON:**  
+<https://marinebon.org/p2p/>
+
+#### Contacto
+Para consultas técnicas, acceso a datos o colaboraciones:
+
+📧 **Dr. Gonzalo Bravo**  
+✉️ *gonzalobravoargentina@gmail.com* 
+
+*Este dashboard es una herramienta dinámica en evolución, diseñada para apoyar la toma de decisiones, la gestión adaptativa y la comunicación científica.*
+

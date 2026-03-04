@@ -1,0 +1,10 @@
+name: monitoreo-intermareal-mbon
+title:
+username: gonzalobravo
+account: gonzalobravo
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16745542
+bundleId: 11623859
+url: https://gonzalobravo.shinyapps.io/monitoreo-intermareal-mbon/
+version: 1
