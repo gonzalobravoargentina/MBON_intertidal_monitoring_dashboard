@@ -6,6 +6,14 @@ rsconnect::setAccountInfo(name='mbon-poletopole',
 
 rsconnect::deployApp(
   appDir = ".",
-  appPrimaryDoc = "shiny_mbon_con_indice.rmd",
+  appPrimaryDoc = "RISI_dashboard.rmd",
   appName = "monitoreo-intermareal"
+)
+
+
+rsconnect::deployApp(
+  appDir = ".",
+  appPrimaryDoc = "RISI_dashboard.Rmd",
+  appName = "monitoreo-intermareal",
+  forceUpdate = TRUE
 )

@@ -31,6 +31,7 @@ library(scales)
 options(dplyr.summarise.inform = FALSE)
 ```
 
+
 ```{r dataread, include=FALSE, message=FALSE, warning=FALSE}
 # =========================
 # 1) Data loading
@@ -89,9 +90,9 @@ names(labels_catami) <- catami_seleccion
 labels_catami[is.na(labels_catami)] <- names(labels_catami)[is.na(labels_catami)]
 ```
 
-```{r arg_index_params, include=FALSE}
+```{r risi_index_params, include=FALSE}
 # ============================================================
-# ARG-RI-EBQI (Argentine Rocky Intertidal Ecosystem-Based Quality Index)
+# RISI (Rocky Intertidal Status Index)
 # *Implementación para el dashboard*
 # - Se calcula SOLO para el intermareal medio (MIDTIDE)
 # - Funciona con las mismas columnas CATAMI (MOB, MAS, MAF, SC)
@@ -113,7 +114,7 @@ Wsum4_core <- sum(W_core) * 4
 # Bare-substrate override parameters
 SC_bare_threshold    <- 85
 MOB_exception_thr    <- 10
-ARG_RI_EBQI_bare_cap <- 2.0
+RISI_bare_cap <- 2.0
 
 # Scoring functions (0–4)
 S_bio_fun <- function(bio) {
@@ -138,7 +139,7 @@ S_inv_fun <- function(x) {
   )
 }
 
-classify_ARG_RI_EBQI <- function(x) {
+classify_RISI <- function(x) {
   case_when(
     is.na(x) ~ NA_character_,
     x >= 7.5 ~ "High",
@@ -149,7 +150,7 @@ classify_ARG_RI_EBQI <- function(x) {
   )
 }
 
-ARG_levels <- c("High", "Good", "Moderate", "Poor", "Bad")
+RISI_levels <- c("High", "Good", "Moderate", "Poor", "Bad")
 
 class_cols <- c(
   "Bad"      = "#B71C1C",
@@ -275,7 +276,7 @@ colores_catami <- reactive({
 })
 
 # ============================================================
-# ARG-RI-EBQI: cálculo por foto (MIDTIDE) + resumen para mapa
+# RISI: cálculo por foto (MIDTIDE) + resumen para mapa
 # ============================================================
 
 AMP_index <- reactive({
@@ -312,16 +313,16 @@ AMP_index <- reactive({
         W_core["MAF"] * S_MAF +
         W_core["SC"]  * S_SC,
 
-      ARG_RI_EBQI_raw = (num / Wsum4_core) * 10,
+      RISI_raw = (num / Wsum4_core) * 10,
 
-      ARG_RI_EBQI = if_else(
+      RISI = if_else(
         (coalesce(SC, 0) >= SC_bare_threshold) & (coalesce(MOB, 0) < MOB_exception_thr),
-        pmin(ARG_RI_EBQI_raw, ARG_RI_EBQI_bare_cap),
-        ARG_RI_EBQI_raw
+        pmin(RISI_raw, RISI_bare_cap),
+        RISI_raw
       ),
 
-      ARG_RI_EBQI_class = classify_ARG_RI_EBQI(ARG_RI_EBQI),
-      ARG_RI_EBQI_class = factor(ARG_RI_EBQI_class, levels = ARG_levels, ordered = TRUE)
+      RISI_class = classify_RISI(RISI),
+      RISI_class = factor(RISI_class, levels = RISI_levels, ordered = TRUE)
     )
 })
 
@@ -339,13 +340,13 @@ indice_resumen_mapa <- reactive({
       summarise(
         lon = mean(as.numeric(Longitude), na.rm = TRUE),
         lat = mean(as.numeric(Latitude),  na.rm = TRUE),
-        ARG_RI_EBQI_mean = mean(ARG_RI_EBQI, na.rm = TRUE),
+        RISI_mean = mean(RISI, na.rm = TRUE),
         n_fotos = n(),
         .groups = "drop"
       ) %>%
       mutate(
-        ARG_RI_EBQI_class = classify_ARG_RI_EBQI(ARG_RI_EBQI_mean),
-        ARG_RI_EBQI_class = factor(ARG_RI_EBQI_class, levels = ARG_levels, ordered = TRUE),
+        RISI_class = classify_RISI(RISI_mean),
+        RISI_class = factor(RISI_class, levels = RISI_levels, ordered = TRUE),
         etiqueta = site
       )
   } else {
@@ -354,13 +355,13 @@ indice_resumen_mapa <- reactive({
       summarise(
         lon = mean(as.numeric(Longitude), na.rm = TRUE),
         lat = mean(as.numeric(Latitude),  na.rm = TRUE),
-        ARG_RI_EBQI_mean = mean(ARG_RI_EBQI, na.rm = TRUE),
+        RISI_mean = mean(RISI, na.rm = TRUE),
         n_fotos = n(),
         .groups = "drop"
       ) %>%
       mutate(
-        ARG_RI_EBQI_class = classify_ARG_RI_EBQI(ARG_RI_EBQI_mean),
-        ARG_RI_EBQI_class = factor(ARG_RI_EBQI_class, levels = ARG_levels, ordered = TRUE),
+        RISI_class = classify_RISI(RISI_mean),
+        RISI_class = factor(RISI_class, levels = RISI_levels, ordered = TRUE),
         etiqueta = locality
       )
   }
@@ -392,7 +393,7 @@ coralnet_link <- reactive({
 })
 
 indice_filtrado <- reactive({
-  df <- AMP_index
+  df <- AMP_index()
 
   # Filtro por localidad (si aplica)
   if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
@@ -424,29 +425,29 @@ indice_filtrado <- reactive({
 conteo_indice_clases <- reactive({
   df <- AMP_index()
   req(nrow(df) > 0)
-  req("ARG_RI_EBQI_class" %in% names(df))
+  req("RISI_class" %in% names(df))
 
   # asegurar orden fijo
   df <- df %>%
     mutate(
-      ARG_RI_EBQI_class = factor(as.character(ARG_RI_EBQI_class),
-                                 levels = ARG_levels, ordered = TRUE)
+      RISI_class = factor(as.character(RISI_class),
+                                 levels = RISI_levels, ordered = TRUE)
     )
 
   if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
     # por sitio dentro de la localidad
     out <- df %>%
-      count(locality, site, ARG_RI_EBQI_class, name = "n_fotos") %>%
+      count(locality, site, RISI_class, name = "n_fotos") %>%
       mutate(etiqueta = site)
   } else {
     # por localidad
     out <- df %>%
-      count(locality, ARG_RI_EBQI_class, name = "n_fotos") %>%
+      count(locality, RISI_class, name = "n_fotos") %>%
       mutate(etiqueta = locality)
   }
 
   out %>%
-    filter(!is.na(ARG_RI_EBQI_class)) %>%
+    filter(!is.na(RISI_class)) %>%
     mutate(
       etiqueta = forcats::fct_reorder(etiqueta, n_fotos, .fun = sum, .desc = TRUE)
     )
@@ -499,6 +500,10 @@ output$mapa <- renderLeaflet({
     addLayersControl(
       baseGroups = c("Satélite", "Mapa"),
       options = layersControlOptions(collapsed = FALSE)
+    ) %>%
+    addScaleBar(
+      position = "topleft",
+      options = scaleBarOptions(imperial = FALSE, maxWidth = 150)
     )
 
   # Zoom dinámico según filtro de localidad
@@ -560,9 +565,9 @@ output$barras_catami <- renderPlotly({
 })
 ```
 
-# Índice ARG-RI-EBQI
+# Índice RISI
 
-**ARG-RI-EBQI** (Argentine Rocky Intertidal Ecosystem-Based Quality Index) evalúa la condición del intermareal medio combinando cobertura de mejillones, algas y sustrato desnudo. Valores más altos indican mejor estado ecológico.
+**RISI** (Rocky Intertidal Status Index) evalúa la condición del intermareal medio combinando cobertura de mejillones, algas y sustrato desnudo. Valores más altos indican mejor estado ecológico.
 El mapa muestra el valor promedio por localidad o sitio, mientras que el gráfico resume la cantidad de fotocuadrantes en cada categoría: High (≥ 7.5), Good (6.0–7.49), Moderate (4.5–5.99), Poor (3.5–4.49) y Bad (< 3.5).
 
 ```{r, include=FALSE}
@@ -592,7 +597,7 @@ uiOutput("btn_coralnet")
 
 ## Column {data-width=6}
 
-### Estado ecológico (ARG-RI-EBQI) — mapa interactivo
+### Estado ecológico (RISI) — mapa interactivo
 
 ```{r}
 leafletOutput("mapa_indice", height = 650)
@@ -606,12 +611,12 @@ output$mapa_indice <- renderLeaflet({
   # radio por valor del índice (0–10)
   pts <- pts %>%
     mutate(
-      radius = rescale(ARG_RI_EBQI_mean, to = c(5, 18), from = c(0, 10))
+      radius = rescale(RISI_mean, to = c(5, 18), from = c(0, 10))
     )
 
   pal_class <- colorFactor(
-    palette = unname(class_cols[ARG_levels]),
-    domain  = ARG_levels,
+    palette = unname(class_cols[RISI_levels]),
+    domain  = RISI_levels,
     ordered = TRUE
   )
 
@@ -631,22 +636,26 @@ output$mapa_indice <- renderLeaflet({
       radius = ~radius,
       weight = 0.8,
       color = "black",
-      fillColor = ~pal_class(as.character(ARG_RI_EBQI_class)),
+      fillColor = ~pal_class(as.character(RISI_class)),
       fillOpacity = 0.85,
       popup = ~paste0(
         "<b>", titulo_popup, ":</b> ", etiqueta,
         ifelse(titulo_popup == "Sitio", paste0("<br><b>Localidad:</b> ", locality), ""),
-        "<br><b>ARG-RI-EBQI (promedio):</b> ", round(ARG_RI_EBQI_mean, 2),
-        "<br><b>Clase:</b> ", as.character(ARG_RI_EBQI_class),
+        "<br><b>RISI (promedio):</b> ", round(RISI_mean, 2),
+        "<br><b>Clase:</b> ", as.character(RISI_class),
         "<br><b>Fotos (MIDTIDE):</b> ", n_fotos
       )
     ) %>%
     addLegend(
       position = "bottomright",
       pal = pal_class,
-      values = ~ARG_RI_EBQI_class,
-      title = "Clase (ARG-RI-EBQI)",
+      values = ~RISI_class,
+      title = "Clase (RISI)",
       opacity = 1
+    ) %>%
+    addScaleBar(
+      position = "topleft",
+      options = scaleBarOptions(imperial = FALSE, maxWidth = 150)
     ) %>%
     addLayersControl(
       baseGroups = c("Satélite", "Mapa"),
@@ -678,14 +687,14 @@ output$barras_indice_clases <- renderPlotly({
 
   etiqueta_y <- if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") "Sitio" else "Localidad"
 
-  p <- ggplot(dfc, aes(x = etiqueta, y = n_fotos, fill = ARG_RI_EBQI_class)) +
+  p <- ggplot(dfc, aes(x = etiqueta, y = n_fotos, fill = RISI_class)) +
     geom_col(width = 0.75) +
     coord_flip() +
     scale_fill_manual(values = class_cols, drop = FALSE) +
     labs(
       x = etiqueta_y,
       y = "N° fotocuadrantes (MIDTIDE)",
-      fill = "Clase ARG-RI-EBQI"
+      fill = "Clase RISI"
     ) +
     theme_minimal(base_size = 12) +
     theme(
@@ -931,4 +940,3 @@ Para consultas técnicas, acceso a datos o colaboraciones:
 ✉️ *gonzalobravoargentina@gmail.com* 
 
 *Este dashboard es una herramienta dinámica en evolución, diseñada para apoyar la toma de decisiones, la gestión adaptativa y la comunicación científica.*
-
