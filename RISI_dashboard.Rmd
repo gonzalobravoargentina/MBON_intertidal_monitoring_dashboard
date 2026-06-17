@@ -377,45 +377,14 @@ build_coralnet_url <- function(locality) {
   paste0(base, loc_plus, "&aux5=MIDTIDE")
 }
 
-# Link dinámico a CoralNet (todas las imágenes por localidad)
+# Link dinámico a CoralNet (filtra MIDTIDE, igual que build_coralnet_url)
 coralnet_link <- reactive({
   if (is.null(input$sel_localidad) || input$sel_localidad == "ALL") {
     return(NULL)
   }
-
-  # Reemplazar espacios por "+"
-  loc_encoded <- gsub(" ", "+", input$sel_localidad)
-
-  paste0(
-    "https://coralnet.ucsd.edu/source/2897/browse/images/?aux3=",
-    loc_encoded
-  )
+  build_coralnet_url(input$sel_localidad)
 })
 
-indice_filtrado <- reactive({
-  df <- AMP_index()
-
-  # Filtro por localidad (si aplica)
-  if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") {
-    df <- df %>% filter(locality == input$sel_localidad)
-  }
-
-  # Filtro por año (si aplica)
-  if (!is.null(input$sel_year) && input$sel_year != "ALL") {
-    df <- df %>% filter(Year == as.integer(input$sel_year))
-  }
-
-  # Filtro por estación (si aplica)
-  # OJO: en tu índice usás Season (WARM/COLD) vs estacion (Cálida/Fría)
-  # Ajustá según cómo quedó AMP_index:
-  if (!is.null(input$sel_estacion) && input$sel_estacion != "ALL") {
-    # Si AMP_index tiene Season como "WARM"/"COLD", traducí:
-    season_map <- c("Cálida" = "WARM", "Fría" = "COLD")
-    df <- df %>% filter(Season == season_map[[input$sel_estacion]])
-  }
-
-  df
-})
 
 # ============================================================
 # Conteo de fotocuadrantes por clase del índice (Bad..High)
@@ -483,7 +452,7 @@ output$mapa <- renderLeaflet({
   # Mapa base
   m <- leaflet(df, options = leafletOptions(zoomSnap = 0.25)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite") %>%
-    addProviderTiles(providers$Stadia.OSMBright, group = "Mapa") %>%
+    addProviderTiles(providers$CartoDB.Positron, group = "Mapa") %>%
     addCircleMarkers(
       lng = ~Longitude, lat = ~Latitude,
       radius = 4, weight = 0.7, fillOpacity = 0.7,
@@ -551,7 +520,7 @@ output$barras_catami <- renderPlotly({
   p <- ggplot(df_cov, aes(x = eje_x, y = Cobertura, fill = CATAMI)) +
     geom_col() +
     facet_grid(estacion ~ strata) +
-    scale_fill_manual(values = colores_catami(), guide = "none") +
+    scale_fill_manual(values = colores_catami(), name = "Categoría CATAMI") +
     labs(
       x = x_label,
       y = "Cobertura media (%)"
@@ -630,7 +599,7 @@ output$mapa_indice <- renderLeaflet({
 
   m <- leaflet(pts, options = leafletOptions(zoomSnap = 0.25)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite") %>%
-    addProviderTiles(providers$Stadia.OSMBright, group = "Mapa") %>%
+    addProviderTiles(providers$CartoDB.Positron, group = "Mapa") %>%
     addCircleMarkers(
       lng = ~lon, lat = ~lat,
       radius = ~radius,
@@ -714,24 +683,6 @@ library(scales)
 # Área por foto (25 x 25 cm = 0.0625 m²)
 area_por_foto_m2 <- 0.0625
 
-# Serie temporal (diaria) para acumulación
-muestreo_tiempo <- reactive({
-  df <- AMP_filtrado()
-  req(nrow(df) > 0)
-  req("Date" %in% names(df))
-
-  df <- df %>% filter(!is.na(Date))
-  req(nrow(df) > 0)
-
-  df %>%
-    count(Date, name = "n_fotos") %>%
-    arrange(Date) %>%
-    mutate(
-      fotos_acum = cumsum(n_fotos),
-      area_m2_acum = fotos_acum * area_por_foto_m2
-    )
-})
-
 # KPIs filtrados
 resumen_muestreo <- reactive({
   df <- AMP_filtrado()
@@ -765,22 +716,6 @@ fotos_por_anio_estacion <- reactive({
     arrange(year, estacion)
 })
 
-# Tabla (totales + desglose por localidad/sitio)
-tabla_totales <- reactive({
-  df <- AMP_filtrado()
-  req(nrow(df) > 0)
-
-  df <- df %>% mutate(Date = as.Date(Date))
-
-  df %>%
-    group_by(locality, site) %>%
-    summarise(
-      fotos = n(),
-      dias = n_distinct(Date[!is.na(Date)]),
-      .groups = "drop"
-    ) %>%
-    arrange(desc(fotos))
-})
 ```
 
 ## Row {data-height=120}
