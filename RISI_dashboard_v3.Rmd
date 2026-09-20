@@ -74,6 +74,80 @@ body, .tab-content { background-color: #f0f4f8 !important; }
 .info-logo img { max-height: 60px; }
 </style>
 
+<script>
+(function () {
+
+  // Instancia Leaflet real de un output de R. El binding htmlwidgets del
+  // paquete leaflet expone getMap(). OJO: no existe ningún el._leaflet_map
+  // — buscar ahí devuelve undefined y el invalidateSize() nunca corre, que
+  // es la razón por la que los mapas quedaban desfasados al cambiar de tab.
+  function getLeafletMap(id) {
+    try {
+      if (window.HTMLWidgets) {
+        var w = HTMLWidgets.find("#" + id);
+        if (w && typeof w.getMap === "function") return w.getMap();
+      }
+    } catch (err) {}
+    return null;
+  }
+
+  // Leaflet recalcula el contenedor (medía 0×0 con la pestaña oculta)
+  function refreshMap(id) {
+    var m = getLeafletMap(id);
+    if (m) { try { m.invalidateSize(true); } catch (err) {} }
+  }
+
+  // IDs de los mapas leaflet dentro de un panel
+  function mapsInPane(sel) {
+    var ids = [];
+    try {
+      $(sel).find("div.leaflet").each(function () {
+        var id = $(this).attr("id");
+        if (id && ids.indexOf(id) === -1) ids.push(id);
+      });
+    } catch (err) {}
+    return ids;
+  }
+
+  function activePane() { return ".tab-pane.active, .section.level1.active"; }
+
+  // Un input POR MAPA: cada observer de R queda independiente del otro.
+  function syncMaps(ids) {
+    if (!ids || !ids.length) return;
+    ids.forEach(function (id) {
+      refreshMap(id);
+      if (window.Shiny) {
+        Shiny.setInputValue("shown_" + id, Date.now(), { priority: "event" });
+      }
+    });
+  }
+
+  // Al mostrarse una pestaña con mapas
+  $(document).on("shown.bs.tab", function (e) {
+    var href = $(e.target).attr("href");
+    if (!href || href.charAt(0) !== "#") return;
+    var ids = mapsInPane(href);
+    if (!ids.length) return;
+
+    // 1) el contenedor ya es visible → Leaflet recalcula su tamaño
+    setTimeout(function () {
+      ids.forEach(refreshMap);
+      window.dispatchEvent(new Event("resize"));
+    }, 120);
+
+    // 2) tamaño ya estable → recién ahí R reaplica el encuadre
+    setTimeout(function () { syncMaps(ids); }, 420);
+  });
+
+  // Encuadre inicial: shown.bs.tab no dispara para la pestaña que ya
+  // está activa al cargar la página.
+  $(document).on("shiny:connected", function () {
+    setTimeout(function () { syncMaps(mapsInPane(activePane())); }, 700);
+  });
+
+})();
+</script>
+
 
 ```{r setup, include=FALSE}
 library(flexdashboard)
@@ -213,6 +287,30 @@ build_coralnet_url <- function(loc, yr = NULL, strata = NULL) {
   if (!is.null(yr) && yr != "ALL")
     base <- paste0(base, "&photo_date_0=year&photo_date_1=", yr)
   base
+}
+
+# Bounds geográficos de una localidad, calculados sobre los datos crudos.
+# Función PURA: sólo devuelve números, no referencia ni modifica ningún
+# mapa. Cada mapa la usa por su cuenta, así que compartirla no los acopla.
+# Se calcula sobre AMP (no sobre los datos filtrados) para que la vista
+# dependa únicamente de la localidad y no salte con año/estación/estrato.
+bounds_localidad <- function(loc_sel) {
+  df <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
+  if (!is.null(loc_sel) && loc_sel != "ALL")
+    df <- df %>% filter(locality == loc_sel)
+  if (nrow(df) == 0) return(NULL)
+
+  lng_r <- range(as.numeric(df$Longitude), na.rm = TRUE)
+  lat_r <- range(as.numeric(df$Latitude),  na.rm = TRUE)
+  if (any(!is.finite(c(lng_r, lat_r)))) return(NULL)
+
+  # Margen mínimo: si los puntos están casi superpuestos, diff() ≈ 0 y
+  # fitBounds sobre un rectángulo degenerado devuelve un zoom inservible.
+  span <- max(diff(lng_r), diff(lat_r))
+  pad  <- if (span < 0.005) 0.005 else span * 0.15
+
+  list(lng1 = lng_r[1] - pad, lat1 = lat_r[1] - pad,
+       lng2 = lng_r[2] + pad, lat2 = lat_r[2] + pad)
 }
 
 # HTML pill control rendered on top of the leaflet map
@@ -446,11 +544,11 @@ RISI = (25·S_BIO + 20·S_DIST) / 180 × 10
   ))
 })
 
-# ── Fotocuadrantes tab: localidad viene de Resultados (sel_localidad);
-#    año, estación y estrato son filtros propios de FC.
+# ── Fotocuadrantes: filtros 100% propios de la pestaña ───────
+# Ninguno depende de Resultados: las dos pestañas son independientes.
 AMP_filtrado_fc <- reactive({
   df <- AMP
-  loc <- input$sel_localidad
+  loc <- input$sel_loc_fc
   if (!is.null(loc)                  && loc!="ALL")               df <- df %>% filter(locality==loc)
   if (!is.null(input$sel_year_fc)   && input$sel_year_fc!="ALL")  df <- df %>% filter(year==as.integer(input$sel_year_fc))
   if (!is.null(input$sel_est_fc)    && input$sel_est_fc!="ALL")   df <- df %>% filter(estacion==input$sel_est_fc)
@@ -464,37 +562,91 @@ output$fotocuadrante_img <- renderImage(
   deleteFile=FALSE
 )
 
+# ═══════════════════════════════════════════════════════════════════
+#  MAPA DE FOTOCUADRANTES — unidad autónoma
+#  Se rige SOLO por los filtros de esta pestaña (sel_loc_fc, año,
+#  estación, estrato). No comparte observers ni estado con mapa_indice.
+# ═══════════════════════════════════════════════════════════════════
+
+# Colores de estrato con vector nombrado. colorFactor ordena el dominio
+# alfabéticamente (HIGHTIDE, LOWTIDE, MIDTIDE) sin respetar el orden que
+# uno pasa, así que terminaba pintando el intermareal bajo de celeste y
+# el medio de verde. Un vector nombrado no tiene ese problema.
+strata_colors   <- c("HIGHTIDE"="#e74c3c", "MIDTIDE"="#3498db", "LOWTIDE"="#2ecc71")
+strata_color_fn <- function(s) unname(strata_colors[as.character(s)])
+
+# Encuadra ESTE mapa. Nunca toca mapa_indice.
+zoom_mapa_fc <- function(loc_sel) {
+  b <- bounds_localidad(loc_sel)
+  if (is.null(b)) return(invisible(NULL))
+  leafletProxy("mapa_sitios") %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
+  invisible(NULL)
+}
+
+# Mapa base: se dibuja UNA sola vez, sin dependencias reactivas.
+# setView y no fitBounds: al arrancar, esta pestaña está oculta y el
+# contenedor mide 0×0; un fitBounds ahí deja Leaflet en zoom ~0, que es
+# exactamente el "se ve el mundo entero" que veníamos arrastrando.
 output$mapa_sitios <- renderLeaflet({
-  df <- AMP_filtrado_fc()
-  req(nrow(df)>0, all(c("Latitude","Longitude","strata") %in% names(df)))
-  df <- df %>% filter(!is.na(Latitude),!is.na(Longitude))
-  req(nrow(df)>0)
+  df_all <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
 
-  pal_strata <- colorFactor(
-    palette = c("#e74c3c","#3498db","#2ecc71"),
-    domain  = c("HIGHTIDE","MIDTIDE","LOWTIDE")
-  )
-  lng_r <- range(as.numeric(df$Longitude),na.rm=T)
-  lat_r <- range(as.numeric(df$Latitude), na.rm=T)
-  pad   <- max(diff(lng_r),diff(lat_r)) * 0.15
-
-  leaflet(df, options=leafletOptions(zoomSnap=0.25)) %>%
-    addProviderTiles(providers$Esri.WorldImagery,group="Satélite") %>%
-    addProviderTiles(providers$CartoDB.Positron, group="Mapa") %>%
-    addCircleMarkers(
-      lng=~as.numeric(Longitude), lat=~as.numeric(Latitude),
-      radius=4, weight=0.7, fillOpacity=0.85,
-      color=~pal_strata(strata), fillColor=~pal_strata(strata),
-      popup=~paste0("<b>",locality,"</b><br>Sitio: ",site,
-                    "<br>Estrato: ",strata,"<br>Fecha: ",Date)
-    ) %>%
-    addLegend("bottomright",pal=pal_strata,values=~strata,
-              title="Estrato",opacity=0.9,
-              labFormat=labelFormat(transform=function(x) c("Intermareal alto","Intermareal medio","Intermareal bajo"))) %>%
-    addScaleBar("topleft",options=scaleBarOptions(imperial=FALSE,maxWidth=100)) %>%
-    addLayersControl(baseGroups=c("Satélite","Mapa"),options=layersControlOptions(collapsed=TRUE)) %>%
-    fitBounds(lng_r[1]-pad,lat_r[1]-pad,lng_r[2]+pad,lat_r[2]+pad)
+  leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
+    addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
+                     options = providerTileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
+    # OSM en lugar de CartoDB: gratuito, sin API key, y con upscaling
+    # hasta zoom 22 para separar fotocuadrantes contiguos.
+    addTiles(group = "Mapa",
+             options = tileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
+    addLegend("bottomright",
+              colors = unname(strata_colors),
+              labels = c("Intermareal alto (HIGHTIDE)",
+                         "Intermareal medio (MIDTIDE)",
+                         "Intermareal bajo (LOWTIDE)"),
+              title = "Estrato", opacity = 0.9) %>%
+    addScaleBar("topleft", options = scaleBarOptions(imperial = FALSE, maxWidth = 100)) %>%
+    addLayersControl(baseGroups = c("Satélite","Mapa"),
+                     options = layersControlOptions(collapsed = TRUE)) %>%
+    setView(lng  = mean(as.numeric(df_all$Longitude), na.rm = TRUE),
+            lat  = mean(as.numeric(df_all$Latitude),  na.rm = TRUE),
+            zoom = 6)
 })
+# Sin suspensión: si Shiny suspende el output con la pestaña oculta y
+# después lo reanuda, renderLeaflet vuelve a correr y re-crea el mapa
+# desde cero, perdiendo marcadores y encuadre puestos por proxy.
+outputOptions(output, "mapa_sitios", suspendWhenHidden = FALSE)
+
+# Marcadores: se redibujan al cambiar los filtros SIN tocar la vista,
+# así cambiar estrato o año no le resetea el zoom al usuario.
+observe({
+  df <- AMP_filtrado_fc()
+  req(nrow(df) > 0, all(c("Latitude","Longitude","strata") %in% names(df)))
+  df <- df %>% filter(!is.na(Latitude), !is.na(Longitude))
+  req(nrow(df) > 0)
+
+  leafletProxy("mapa_sitios", data = df) %>%
+    clearMarkers() %>%
+    addCircleMarkers(
+      lng = ~as.numeric(Longitude), lat = ~as.numeric(Latitude),
+      radius = 4, weight = 0.7, fillOpacity = 0.85,
+      color     = ~strata_color_fn(strata),
+      fillColor = ~strata_color_fn(strata),
+      popup = ~paste0("<b>",locality,"</b><br>Sitio: ",site,
+                      "<br>Estrato: ",strata,"<br>Fecha: ",Date,
+                      "<br><span style='color:#888;font-size:11px;'>📷 ",Name,"</span>")
+    )
+})
+
+# Zoom: SÓLO al cambiar la localidad de esta pestaña.
+observeEvent(input$sel_loc_fc, {
+  zoom_mapa_fc(input$sel_loc_fc)
+}, ignoreInit = TRUE)
+
+# Al mostrarse la pestaña, el JS ya corrió invalidateSize() sobre este
+# mapa; recién entonces el contenedor tiene tamaño real y fitBounds sirve.
+observeEvent(input$shown_mapa_sitios, {
+  # bounds_localidad() ya trata NULL como "todas las localidades"
+  zoom_mapa_fc(input$sel_loc_fc)
+}, ignoreInit = TRUE)
 ```
 
 # Resultados
@@ -529,16 +681,53 @@ leafletOutput("mapa_indice", height="100%", width="100%")
 ```
 
 ```{r main_map_server, include=FALSE}
+# ═══════════════════════════════════════════════════════════════════
+#  MAPA DE RESULTADOS — unidad autónoma
+#  Se rige SOLO por los filtros de esta pestaña. No comparte observers
+#  ni estado con mapa_sitios.
+# ═══════════════════════════════════════════════════════════════════
+
+# Encuadra ESTE mapa. Nunca toca mapa_sitios.
+zoom_mapa_indice <- function(loc_sel) {
+  b <- bounds_localidad(loc_sel)
+  if (is.null(b)) return(invisible(NULL))
+  leafletProxy("mapa_indice") %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
+  invisible(NULL)
+}
+
+# Mapa base dibujado UNA sola vez. Antes este renderLeaflet dependía de
+# indice_resumen_mapa(): cada cambio de filtro re-creaba el mapa entero,
+# y si ocurría con la pestaña oculta el contenedor era 0×0 → al volver a
+# Resultados el mapa aparecía desfasado y en blanco.
 output$mapa_indice <- renderLeaflet({
-  pts <- indice_resumen_mapa(); req(nrow(pts)>0)
-  pts <- pts %>% mutate(radius=rescale(RISI_mean,to=c(7,20),from=c(0,10)))
+  df_all <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
+
+  leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
+    addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
+                     options = providerTileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
+    addTiles(group = "Mapa",
+             options = tileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
+    # ── Classification card overlaid on map (survives zoom) ──
+    addControl(html = risi_pills_html, position = "topright") %>%
+    addScaleBar("bottomleft", options = scaleBarOptions(imperial = FALSE, maxWidth = 100)) %>%
+    addLayersControl(baseGroups = c("Satélite","Mapa"),
+                     options = layersControlOptions(collapsed = TRUE)) %>%
+    setView(lng  = mean(as.numeric(df_all$Longitude), na.rm = TRUE),
+            lat  = mean(as.numeric(df_all$Latitude),  na.rm = TRUE),
+            zoom = 6)
+})
+outputOptions(output, "mapa_indice", suspendWhenHidden = FALSE)
+
+# Marcadores del índice: se redibujan con los filtros sin tocar la vista.
+# clearMarkers() no borra controles, así que la tarjeta RISI sobrevive.
+observe({
+  pts <- indice_resumen_mapa(); req(nrow(pts) > 0)
+  pts <- pts %>% mutate(radius = rescale(RISI_mean, to = c(7,20), from = c(0,10)))
   pal_class <- colorFactor(palette=unname(class_cols[RISI_levels]),domain=RISI_levels,ordered=TRUE)
   titulo_popup <- if(!is.null(input$sel_localidad)&&input$sel_localidad!="ALL") "Sitio" else "Localidad"
-  lng_r <- range(pts$lon,na.rm=T); lat_r <- range(pts$lat,na.rm=T)
 
-  m <- leaflet(pts,options=leafletOptions(zoomSnap=0.25)) %>%
-    addProviderTiles(providers$Esri.WorldImagery,group="Satélite") %>%
-    addProviderTiles(providers$CartoDB.Positron, group="Mapa") %>%
+  leafletProxy("mapa_indice", data = pts) %>%
+    clearMarkers() %>%
     addCircleMarkers(
       lng=~lon,lat=~lat,radius=~radius,weight=1,
       color="white",fillColor=~pal_class(as.character(RISI_class)),fillOpacity=0.9,
@@ -557,16 +746,19 @@ output$mapa_indice <- renderLeaflet({
         "<br><b>Clase:</b> <strong>",as.character(RISI_class),"</strong>",
         "<br><b>Fotos MIDTIDE:</b> ",n_fotos
       )
-    ) %>%
-    # ── Classification card overlaid on map (survives zoom) ──
-    addControl(html=risi_pills_html, position="topright") %>%
-    addScaleBar("bottomleft",options=scaleBarOptions(imperial=FALSE,maxWidth=100)) %>%
-    addLayersControl(baseGroups=c("Satélite","Mapa"),options=layersControlOptions(collapsed=TRUE))
-
-  pad <- if(diff(lng_r) < 0.002) 0 else max(diff(lng_r), diff(lat_r)) * 0.15
-  if(diff(lng_r) < 0.002) m %>% setView(lng=mean(pts$lon),lat=mean(pts$lat),zoom=10)
-  else m %>% fitBounds(lng_r[1]-pad, lat_r[1]-pad, lng_r[2]+pad, lat_r[2]+pad)
+    )
 })
+
+# Zoom: SÓLO al cambiar la localidad de esta pestaña.
+observeEvent(input$sel_localidad, {
+  zoom_mapa_indice(input$sel_localidad)
+}, ignoreInit = TRUE)
+
+# Al mostrarse la pestaña, después del invalidateSize() del JS.
+observeEvent(input$shown_mapa_indice, {
+  # bounds_localidad() ya trata NULL como "todas las localidades"
+  zoom_mapa_indice(input$sel_localidad)
+}, ignoreInit = TRUE)
 ```
 
 ## Column {data-width=540 .scrollable}
@@ -972,16 +1164,9 @@ output$area_catami <- renderPlotly({
   pl
 })
 
-# ── Sincronizar filtros Resultados → Fotocuadrantes ──────────
-# sel_localidad ya no tiene input propio en FC: AMP_filtrado_fc usa sel_localidad directamente.
-
-observeEvent(input$sel_year, {
-  updateSelectInput(session, "sel_year_fc", selected = input$sel_year)
-}, ignoreInit = TRUE)
-
-observeEvent(input$sel_estacion, {
-  updateSelectInput(session, "sel_est_fc", selected = input$sel_estacion)
-}, ignoreInit = TRUE)
+# ── Sin sincronización entre pestañas ────────────────────────
+# Resultados y Fotocuadrantes son independientes: cada una tiene sus
+# propios filtros y su propio mapa. Cambiar algo acá no altera la otra.
 ```
 
 # Fotocuadrantes
@@ -991,28 +1176,15 @@ observeEvent(input$sel_estacion, {
 ```{r sidebar_fc}
 tags$div(class="sidebar-inner",
   tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
-  # Localidad: controlada desde Resultados, solo lectura en FC
-  tags$div(style="margin-bottom:10px;",
-    tags$label(style="font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:3px;",
-               "Parque / Localidad"),
-    uiOutput("fc_loc_label")
-  ),
+  # Localidad propia: esta pestaña filtra y encuadra por su cuenta,
+  # sin depender de lo que se elija en Resultados.
+  selectInput("sel_loc_fc","Parque / Localidad",choices=c("Todos"="ALL",localidades),selected="ALL"),
   selectInput("sel_year_fc","Año",choices=c("Todos"="ALL",anios),selected="ALL"),
   selectInput("sel_est_fc","Estación",choices=c("Todas"="ALL","Cálida"="Cálida","Fría"="Fría"),selected="ALL"),
   selectInput("sel_strata_fc","Estrato",choices=c("Todos"="ALL","HIGHTIDE","MIDTIDE","LOWTIDE"),selected="ALL")
 )
-output$fc_loc_label <- renderUI({
-  loc <- input$sel_localidad %||% "ALL"
-  lbl <- if (is.null(loc) || loc == "ALL") "Todos" else loc
-  tags$div(style=paste0("padding:5px 8px;background:#243b55;border:1px solid #34495e;",
-                        "border-radius:5px;color:#ecf0f1;font-size:13px;min-height:32px;",
-                        "display:flex;align-items:center;"),
-    tags$span(lbl),
-    tags$span(style="margin-left:auto;font-size:10px;color:#5d7a96;", "← desde Resultados")
-  )
-})
 renderUI({
-  loc    <- input$sel_localidad %||% "ALL"
+  loc    <- input$sel_loc_fc
   yr     <- input$sel_year_fc
   strata <- input$sel_strata_fc
   if (!is.null(loc) && loc != "ALL") {
@@ -1109,12 +1281,12 @@ output$plot_esfuerzo_fc <- renderPlotly({
 })
 
 # Matriz de completitud: qué se muestreó y qué falta, por sitio/localidad y año.
-# La localidad viene de Resultados (sel_localidad).
+# Usa sel_loc_fc, el filtro propio de esta pestaña.
 output$matriz_completitud_fc <- renderPlotly({
-  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+  by_site <- !is.null(input$sel_loc_fc) && input$sel_loc_fc != "ALL"
 
   df_mat <- AMP_filtrado_fc() %>% filter(!is.na(year))
-  if (by_site) df_mat <- df_mat %>% filter(locality == input$sel_localidad)
+  if (by_site) df_mat <- df_mat %>% filter(locality == input$sel_loc_fc)
 
   df_mat <- df_mat %>%
     { if (by_site) group_by(., site, year) else group_by(., locality, year) } %>%
