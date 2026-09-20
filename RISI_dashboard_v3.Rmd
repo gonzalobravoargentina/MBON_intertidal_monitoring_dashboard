@@ -136,12 +136,49 @@ catami_dicc <- c(
   "MALCB"="Algas formadoras de bosque",
   "MAS"="Algas laminares verdes (Ulva)","MASR"="Algas laminares rojas (Pyropia)"
 )
+# Paleta con correspondencia ecológica: cada color evoca al organismo real,
+# de modo que los gráficos se leen sin tener que consultar la leyenda.
+# Cubre las 19 categorías del diccionario (antes sólo 12 → el resto caía en
+# un brewer.pal de relleno y cambiaba de color entre gráficos).
 colores_catami_fixed <- c(
-  "Bivalvos"="#4DAF4A","Algas laminares verdes (Ulva)"="#006400",
-  "Algas laminares rojas (Pyropia)"="#E41A1C","Algas filamentosas"="#FF7F00",
-  "Suelo Desnudo"="#BBBBBB","Cirripedios"="#984EA3","Algas incrustantes"="#00BCD4",
-  "Algas calcáreas"="#FFEB3B","Algas ramas gruesas"="#1F78B4",
-  "Algas globosas"="#F781BF","Gasterópodos"="#A65628","Tubo poliqueto"="#B0E0E6"
+  # Bivalvos — azul marino oscuro (valvas de mejillón)
+  "Bivalvos"                        = "#1A237E",
+  # Algas rojas — rojo intenso (Pyropia / rodofitas)
+  "Algas laminares rojas (Pyropia)" = "#B71C1C",
+  # Algas verdes laminares — verde medio (Ulva)
+  "Algas laminares verdes (Ulva)"   = "#388E3C",
+  # Algas incrustantes — marrón oscuro (más oscuro que Suelo Desnudo)
+  "Algas incrustantes"              = "#6D4C41",
+  # Algas filamentosas — verde claro (filamentos efímeros)
+  "Algas filamentosas"              = "#A5D6A7",
+  # Algas globosas — marrón oscuro
+  "Algas globosas"                  = "#4E342E",
+  # Algas calcáreas articuladas — rosa claro (coralinas)
+  "Algas calcáreas"                 = "#F48FB1",
+  # Algas ramas gruesas — verde oscuro (más estructurado que MAS y MAF)
+  "Algas ramas gruesas"             = "#1B5E20",
+  # Algas ramas finas — marrón claro
+  "Algas ramas finas"               = "#A1887F",
+  # Algas laminares (genérico) — verde medio
+  "Algas laminares"                 = "#558B2F",
+  # Algas formadoras de bosque (kelp) — verde oscuro
+  "Algas formadoras de bosque"      = "#1B5E20",
+  # Suelo desnudo — marrón arenoso (roca / sustrato desnudo)
+  "Suelo Desnudo"                   = "#8D6E63",
+  # Cirripedios (balanos) — gris claro (caparazón blanco/gris)
+  "Cirripedios"                     = "#90A4AE",
+  # Gasterópodos — naranja tostado (concha de caracol)
+  "Gasterópodos"                    = "#E65100",
+  # Tubo poliqueto — celeste claro
+  "Tubo poliqueto"                  = "#80DEEA",
+  # Anémonas coloniales — lila/lavanda
+  "Anémonas coloniales"             = "#CE93D8",
+  # Anémonas — violeta
+  "Anémonas"                        = "#7B1FA2",
+  # Esponja — amarillo pálido
+  "Esponja"                         = "#FFF176",
+  # Sin definir — gris neutro
+  "Sin definir"                     = "#BDBDBD"
 )
 ```
 
@@ -561,6 +598,19 @@ tags$div(class="scroll-content",
     plotlyOutput("barras_grupos",height="380px")
   ),
 
+  # ── Área apilada CATAMI (solo cuando se filtra localidad) ────
+  conditionalPanel(
+    # La serie temporal sólo tiene sentido con todos los años a la vista
+    condition = "input.sel_localidad !== 'ALL' && input.sel_year === 'ALL'",
+    tags$div(class="chart-block",
+      tags$p(class="section-title","Evolución de la composición bentónica (MIDTIDE)"),
+      tags$p(class="section-desc",
+        "Cobertura media (%) de cada categoría CATAMI a lo largo de los años en el intermareal medio."
+      ),
+      plotlyOutput("area_catami", height = "320px")
+    )
+  ),
+
   # ── MOB trend (visible only when all years selected) ────────
   conditionalPanel(
     condition = "input.sel_year === 'ALL'",
@@ -571,6 +621,17 @@ tags$div(class="scroll-content",
       ),
       plotlyOutput("trend_mob", height="360px")
     )
+  ),
+
+  # ── Heatmap RISI localidad/sitio × año ──────────────────────
+  tags$div(class="chart-block",
+    tags$p(class="section-title",
+      uiOutput("heatmap_risi_title", inline = TRUE)
+    ),
+    tags$p(class="section-desc",
+      uiOutput("heatmap_risi_desc", inline = TRUE)
+    ),
+    plotlyOutput("heatmap_risi", height = "300px")
   ),
 
   # ── RISI class bars ─────────────────────────────────────────
@@ -773,6 +834,135 @@ output$barras_grupos <- renderPlotly({
            margin=list(b=100,t=20)) %>%
     config(displayModeBar = FALSE)
 })
+
+# ── Heatmap RISI ──────────────────────────────────────────────
+output$heatmap_risi_title <- renderUI({
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+  if (by_site)
+    "RISI por sitio y año (MIDTIDE)"
+  else
+    "RISI por localidad y año (MIDTIDE)"
+})
+
+output$heatmap_risi_desc <- renderUI({
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+  if (by_site)
+    paste0("Estado ecológico (RISI) en cada sitio de ", input$sel_localidad, " a lo largo de los años de muestreo.")
+  else
+    "Estado ecológico (RISI) promedio por localidad y año. Permite detectar tendencias y comparar áreas protegidas de un vistazo."
+})
+
+output$heatmap_risi <- renderPlotly({
+  df_idx <- AMP_index(); req(nrow(df_idx) > 0)
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+
+  # AMP_index() already filters MIDTIDE; column is RISI (not RISI_mean)
+  df_heat <- df_idx %>%
+    filter(!is.na(year), !is.na(RISI)) %>%
+    { if (by_site) group_by(., site, year) else group_by(., locality, year) } %>%
+    summarise(RISI_val = mean(RISI, na.rm = TRUE), .groups = "drop") %>%
+    rename(eje_y = 1)
+
+  req(nrow(df_heat) > 0)
+
+  # Orden geográfico norte→sur: latitud ascendente = sur abajo, norte arriba en ggplot
+  grp_var   <- if (by_site) "site" else "locality"
+  lat_order <- AMP %>%
+    filter(!is.na(Latitude)) %>%
+    group_by(across(all_of(grp_var))) %>%
+    summarise(lat_mn = mean(as.numeric(Latitude), na.rm = TRUE), .groups = "drop") %>%
+    arrange(lat_mn) %>%          # ascendente: más sur (lat más negativa) abajo
+    pull(1)
+  df_heat <- df_heat %>%
+    mutate(eje_y = factor(eje_y,
+                          levels = lat_order[lat_order %in% unique(eje_y)]))
+
+  y_label <- if (by_site) "Sitio" else "Localidad"
+
+  p <- ggplot(df_heat,
+    aes(x = factor(year), y = eje_y, fill = RISI_val,
+        text = paste0(y_label, ": ", eje_y,
+                      "<br>Año: ", year,
+                      "<br>RISI: ", round(RISI_val, 2)))) +
+    geom_tile(color = "white", linewidth = 0.4) +
+    scale_fill_gradientn(
+      colors = c("#a50026","#d73027","#f46d43","#fdae61","#ffffbf",
+                 "#a6d96a","#1a9641","#006837"),
+      limits = c(0, 10), name = "RISI",
+      breaks = c(0, 3.5, 4.5, 6, 7.5, 10),
+      labels = c("0","Bad","Poor","Mod","Good","10")
+    ) +
+    labs(x = "Año", y = y_label) +
+    theme_minimal(base_size = 10) +
+    theme(
+      axis.text.x     = element_text(angle = 45, hjust = 1, size = 9),
+      axis.text.y     = element_text(size = 9),
+      panel.grid      = element_blank(),
+      legend.key.height = unit(0.6, "cm"),
+      legend.key.width  = unit(0.25, "cm"),
+      legend.text       = element_text(size = 8)
+    )
+
+  ggplotly(p, tooltip = "text") %>%
+    layout(margin = list(t = 5, r = 10, b = 40)) %>%
+    config(displayModeBar = FALSE)
+})
+
+# ── Área apilada CATAMI ───────────────────────────────────────
+output$area_catami <- renderPlotly({
+  req(!is.null(input$sel_localidad) && input$sel_localidad != "ALL",
+      is.null(input$sel_year) || input$sel_year == "ALL")
+  df <- AMP_filtrado()
+  req(nrow(df) > 0, "year" %in% names(df))
+
+  cats_use <- intersect(catami_seleccion, names(df))
+  df_long <- df %>%
+    filter(strata == "MIDTIDE", !is.na(year)) %>%
+    select(year, all_of(cats_use)) %>%
+    mutate(across(all_of(cats_use), as.numeric)) %>%
+    group_by(year) %>%
+    summarise(across(all_of(cats_use), ~mean(.x, na.rm = TRUE)), .groups = "drop") %>%
+    pivot_longer(-year, names_to = "CATAMI", values_to = "Cobertura") %>%
+    # Rename CATAMI codes to display names (same as cover_resumen)
+    mutate(CATAMI = recode(CATAMI, !!!catami_dicc)) %>%
+    filter(!is.na(Cobertura), Cobertura > 0)
+
+  req(nrow(df_long) > 0)
+
+  # Match colors using display names; fallback for unknowns
+  cats_present <- unique(df_long$CATAMI)
+  cols_use     <- colores_catami_fixed[cats_present]
+  miss         <- is.na(cols_use)
+  if (any(miss)) cols_use[miss] <- RColorBrewer::brewer.pal(max(3, sum(miss)), "Paired")[seq_len(sum(miss))]
+
+  p <- ggplot(df_long,
+    aes(x = year, y = Cobertura, fill = CATAMI, group = CATAMI,
+        text = CATAMI)) +
+    geom_area(position = "stack", alpha = 0.85, color = "white", linewidth = 0.2) +
+    scale_x_continuous(breaks = sort(unique(df_long$year))) +
+    scale_fill_manual(values = cols_use, name = "CATAMI") +
+    labs(x = "Año", y = "Cobertura media (%)") +
+    theme_minimal(base_size = 10) +
+    theme(
+      panel.grid.minor = element_blank(),
+      axis.text.x      = element_text(angle = 45, hjust = 1)
+    )
+
+  pl <- ggplotly(p, tooltip = "text") %>%
+    layout(legend = list(orientation = "h", xanchor = "center", x = 0.5,
+                         y = -0.28, font = list(size = 9)),
+           margin = list(b = 110, t = 10),
+           hovermode = "closest") %>%
+    config(displayModeBar = FALSE)
+
+  # Enable hover over the filled area (not just the border line)
+  pl$x$data <- lapply(pl$x$data, function(trace) {
+    trace$hoveron <- "fills"
+    trace$hoverinfo <- "text"
+    trace
+  })
+  pl
+})
 ```
 
 # Fotocuadrantes
@@ -837,15 +1027,38 @@ renderUI({
 leafletOutput("mapa_sitios", height="100%", width="100%")
 ```
 
-## Column {data-width=440}
+## Column {data-width=440 .scrollable}
 
-### Esfuerzo por año y estación {data-height=380}
+### Fotocuadrantes
 
-```{r effort_fotos}
-plotlyOutput("plot_esfuerzo_fc", height="320px")
+```{r fc_right_panel}
+tags$div(class="scroll-content",
+
+  # ── Foto ejemplo ────────────────────────────────────────────
+  tags$div(class="chart-block",
+    tags$p(class="section-title", "Ejemplo de fotocuadrante"),
+    tags$p(class="section-desc",
+      "Fotocuadrante de 25×25 cm utilizado en el monitoreo del intermareal rocoso."),
+    tags$div(style="display:flex;justify-content:center;padding:4px 0;",
+      imageOutput("fotocuadrante_img", height="300px")
+    )
+  ),
+
+  # ── Esfuerzo ────────────────────────────────────────────────
+  tags$div(class="chart-block",
+    tags$p(class="section-title", "Esfuerzo por año y estación"),
+    plotlyOutput("plot_esfuerzo_fc", height="300px")
+  ),
+
+  # ── Fotocuadrantes por muestreo ─────────────────────────────
+  tags$div(class="chart-block",
+    tags$p(class="section-title", "Fotocuadrantes por muestreo"),
+    plotlyOutput("matriz_completitud_fc", height="320px")
+  )
+)
 ```
 
-```{r effort_fotos_server, include=FALSE}
+```{r fc_right_server, include=FALSE}
 output$plot_esfuerzo_fc <- renderPlotly({
   df <- AMP_filtrado_fc() %>% filter(!is.na(year),!is.na(estacion)) %>%
     count(year,estacion,name="n_fotos") %>% arrange(year,estacion)
@@ -858,17 +1071,50 @@ output$plot_esfuerzo_fc <- renderPlotly({
     theme(legend.position="top",panel.grid.major.x=element_blank())
   ggplotly(p) %>% config(displayModeBar = FALSE)
 })
-```
 
-### Ejemplo de fotocuadrante {data-height=520}
+# Matriz de completitud: qué se muestreó y qué falta, por sitio/localidad y año.
+# Usa sel_loc_fc (el filtro propio de la pestaña Fotocuadrantes).
+output$matriz_completitud_fc <- renderPlotly({
+  by_site <- !is.null(input$sel_loc_fc) && input$sel_loc_fc != "ALL"
 
-```{r foto_fc}
-tags$div(
-  style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px;",
-  tags$p(style="font-size:11px;color:#7f8c8d;margin-bottom:8px;text-align:center;",
-    "Fotocuadrante de 25×25 cm utilizado en el monitoreo del intermareal rocoso."),
-  imageOutput("fotocuadrante_img", height="auto")
-)
+  df_mat <- AMP_filtrado_fc() %>% filter(!is.na(year))
+  if (by_site) df_mat <- df_mat %>% filter(locality == input$sel_loc_fc)
+
+  df_mat <- df_mat %>%
+    { if (by_site) group_by(., site, year) else group_by(., locality, year) } %>%
+    summarise(n_fotos = n(), .groups = "drop") %>%
+    rename(eje_y = 1)
+
+  req(nrow(df_mat) > 0)
+
+  todos_y <- sort(unique(df_mat$eje_y))
+  todos_x <- sort(unique(df_mat$year))
+
+  # Grilla completa: los huecos (combinaciones sin muestreo) quedan como "x"
+  grid <- expand.grid(eje_y = todos_y, year = todos_x, stringsAsFactors = FALSE) %>%
+    left_join(df_mat, by = c("eje_y", "year")) %>%
+    mutate(
+      year_f  = factor(year, levels = todos_x),
+      lbl     = ifelse(is.na(n_fotos), "x", as.character(n_fotos)),
+      tooltip = ifelse(is.na(n_fotos),
+                       paste0(eje_y, " – ", year, "\nSin datos"),
+                       paste0(eje_y, " – ", year, "\n", n_fotos, " fotos"))
+    )
+
+  p <- ggplot(grid, aes(x = year_f, y = eje_y, fill = n_fotos, text = tooltip)) +
+    geom_tile(color = "white", linewidth = 0.6) +
+    geom_text(aes(label = lbl), color = "white", size = 2.5) +
+    scale_fill_gradient(low = "#A5D6A7", high = "#1B5E20",
+                        na.value = "#BDBDBD", name = "N fotos") +
+    labs(x = "Año", y = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(panel.grid = element_blank(),
+          axis.text.y = element_text(size = 8),
+          axis.text.x = element_text(size = 8),
+          legend.position = "right")
+
+  ggplotly(p, tooltip = "text") %>% config(displayModeBar = FALSE)
+})
 ```
 
 # Información
