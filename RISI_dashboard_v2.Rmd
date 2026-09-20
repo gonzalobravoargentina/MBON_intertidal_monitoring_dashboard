@@ -1,0 +1,973 @@
+---
+title: "Monitoreo Intermareales Rocosos"
+output:
+  flexdashboard::flex_dashboard:
+    theme: cosmo
+    logo: logo_blanco.png
+    vertical_layout: fill
+    orientation: columns
+    navbar:
+      - { title: "Protocolo Muestreo", icon: "ion-android-document", href: "https://repository.oceanbestpractices.org/handle/11329/2199.2", align: right }
+      - { title: "MBON Pole to Pole", icon: "ion-android-globe", href: "https://marinebon.org/p2p/", align: right }
+runtime: shiny
+---
+
+<style>
+/* ── Sidebar ── */
+.flexfill > .section-sidebar {
+  flex: 0 0 270px !important; max-width: 270px !important; min-width: 270px !important;
+  background-color: #1b2a3b !important; border-right: none !important;
+  padding: 0 !important; overflow-y: auto;
+  position: relative !important; z-index: 100 !important;
+}
+.navbar-inverse { background-color: #1b2a3b !important; border-color: #0f1b27 !important; }
+.navbar-inverse .navbar-brand { color: #ecf0f1 !important; font-weight: 700; font-size: 15px; }
+.navbar-inverse .navbar-nav > li > a { color: #8fa8c0 !important; font-size: 12px; }
+.navbar-inverse .navbar-nav > li > a:hover { color: #ecf0f1 !important; }
+
+.sidebar-inner { padding: 16px; }
+.shiny-input-container label {
+  font-size: 10px !important; font-weight: 700 !important; color: #5d7a96 !important;
+  text-transform: uppercase !important; letter-spacing: 0.8px !important; margin-bottom: 3px;
+}
+.shiny-input-container .form-control {
+  background-color: #243b55 !important; border: 1px solid #34495e !important;
+  color: #ecf0f1 !important; border-radius: 5px !important; font-size: 13px !important;
+  height: 32px; padding: 4px 8px;
+}
+.shiny-input-container .form-control:focus {
+  border-color: #2ecc71 !important; box-shadow: 0 0 0 2px rgba(46,204,113,0.2) !important; outline: none;
+}
+select option { background-color: #1b2a3b; }
+#download_csv {
+  display: block; width: 100%; padding: 8px 12px; background-color: #2ecc71;
+  border: none; border-radius: 6px; color: white !important; font-weight: 700; font-size: 12px;
+  text-align: center; cursor: pointer; transition: background-color 0.2s; margin-top: 10px;
+}
+#download_csv:hover { background-color: #27ae60; }
+.kpi-strip { background-color: #162231; padding: 12px 16px; margin-top: 4px; }
+.kpi-item { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+.kpi-item:last-child { margin-bottom: 0; }
+.kpi-label { font-size: 10px; color: #5d7a96; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
+.kpi-value { font-size: 13px; color: #ecf0f1; font-weight: 700; }
+
+/* ── Right scrollable panel ── */
+.scroll-content { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+.chart-block { background: white; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.07); padding: 12px 14px 10px 14px; }
+.section-title { font-size: 13px; font-weight: 700; color: #1b2a3b; border-left: 3px solid #2ecc71; padding-left: 8px; margin: 0 0 4px 0; }
+.section-desc { font-size: 11px; color: #7f8c8d; margin-bottom: 8px; line-height: 1.4; }
+.coralnet-link { font-size: 11px; color: #2980b9; font-weight: 600; text-decoration: none; display: inline-block; margin-bottom: 6px; }
+.coralnet-link:hover { text-decoration: underline; }
+
+/* ── General ── */
+body, .tab-content { background-color: #f0f4f8 !important; }
+.chart-stage { padding: 0 !important; }
+
+/* ── CATAMI & Info pages ── */
+.img-page-wrap { display: flex; justify-content: center; align-items: flex-start; padding: 20px; height: 100%; overflow-y: auto; }
+.img-page-wrap img { max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.12); }
+.info-body { max-width: 860px; margin: 0 auto; padding: 30px 20px; font-size: 14px; color: #34495e; line-height: 1.8; }
+.info-body h3 { color: #1b2a3b; border-left: 4px solid #2ecc71; padding-left: 10px; margin-top: 28px; font-size: 16px; }
+.info-body a { color: #2980b9; }
+.info-body strong { color: #1b2a3b; }
+.info-logo { text-align: center; margin-bottom: 24px; }
+.info-logo img { max-height: 60px; }
+</style>
+
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(lubridate)
+library(leaflet)
+library(plotly)
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(forcats)
+library(stringr)
+
+options(dplyr.summarise.inform = FALSE)
+```
+
+```{r dataread, include=FALSE, message=FALSE, warning=FALSE}
+Data <- "DATA"
+cover    <- read_csv(file.path(Data, "percent_covers.csv"), show_col_types = FALSE)
+metadata <- read_csv(file.path(Data, "metadata.csv"),       show_col_types = FALSE)
+AMP <- merge(metadata, cover, by.x = "Name", by.y = "Image name", all.x = TRUE)
+
+AMP <- AMP %>%
+  mutate(
+    Date     = as.Date(Date),
+    year     = year(Date), month = month(Date),
+    estacion = ifelse(month %in% c(12,1,2,3,4,5), "Cálida", "Fría"),
+    Season   = ifelse(month %in% c(12,1,2,3,4,5), "WARM",   "COLD"),
+    strata   = toupper(strata),
+    locality = str_replace(locality, "PIMCPA_ISLA TOVA", "PIMCPA ISLA TOVA")
+  )
+
+catami_seleccion <- c("MAEN","MAF","CRB","MAA","MAEC","MAG","MAS","MASR","MOB","MOG","SC","WPOT")
+catami_seleccion <- catami_seleccion[catami_seleccion %in% names(AMP)]
+localidades <- sort(unique(AMP$locality))
+anios       <- sort(unique(AMP$year))
+
+# ── Locality abbreviations (siglas) ──────────────────────────
+# First letters of each word in the locality name
+make_sigla <- function(x) {
+  toupper(sapply(strsplit(trimws(x), "[ _]+"), function(w) {
+    paste(substr(w, 1, 1), collapse = "")
+  }))
+}
+siglas_vec           <- make_sigla(localidades)
+# Ensure uniqueness: append number if collision
+dupl                 <- duplicated(siglas_vec) | duplicated(siglas_vec, fromLast = TRUE)
+if (any(dupl)) siglas_vec[dupl] <- abbreviate(localidades[dupl], minlength = 4)
+siglas_localidades   <- setNames(siglas_vec, localidades)   # named: full -> sigla
+
+catami_dicc <- c(
+  "CNCA"="Anémonas coloniales","CNTR"="Anémonas","CRB"="Cirripedios",
+  "MOB"="Bivalvos","MOG"="Gasterópodos","SP"="Esponja","WPOT"="Tubo poliqueto",
+  "SC"="Suelo Desnudo","Unc"="Sin definir","MAA"="Algas calcáreas",
+  "MAEC"="Algas ramas gruesas","MAEF"="Algas ramas finas","MAEN"="Algas incrustantes",
+  "MAF"="Algas filamentosas","MAG"="Algas globosas","MALA"="Algas laminares",
+  "MALCB"="Algas formadoras de bosque",
+  "MAS"="Algas laminares verdes (Ulva)","MASR"="Algas laminares rojas (Pyropia)"
+)
+colores_catami_fixed <- c(
+  "Bivalvos"="#4DAF4A","Algas laminares verdes (Ulva)"="#006400",
+  "Algas laminares rojas (Pyropia)"="#E41A1C","Algas filamentosas"="#FF7F00",
+  "Suelo Desnudo"="#BBBBBB","Cirripedios"="#984EA3","Algas incrustantes"="#00BCD4",
+  "Algas calcáreas"="#FFEB3B","Algas ramas gruesas"="#1F78B4",
+  "Algas globosas"="#F781BF","Gasterópodos"="#A65628","Tubo poliqueto"="#B0E0E6"
+)
+```
+
+```{r risi_params, include=FALSE}
+W_core <- c(BIO=25, DIST=20); Wsum4_core <- sum(W_core)*4
+masr_factor<-.8; mas_factor<-.4; maen_factor<-.25
+MOB_threshold<-5; MASR_threshold<-10; w_SC<-.6; w_MAF<-.4
+SC_collapse_thresh<-85; MOB_collapse_thresh<-10; RISI_collapse_cap<-2.0
+RISI_levels <- c("High","Good","Moderate","Poor","Bad")
+class_cols  <- c("Bad"="#B71C1C","Poor"="#FB8C00","Moderate"="#c9a800","Good"="#66C2A5","High"="#3B7EA1")
+
+S_bio_fun <- function(bio)
+  case_when(is.na(bio)~NA_real_, bio>50~4, bio>=25~3, bio>=10~2, bio>=1~1, TRUE~0)
+S_inv_SC <- function(x)
+  case_when(is.na(x)~NA_real_, x<=5~4, x<=15~3, x<=30~2, x<=60~1, TRUE~0)
+S_inv_MAF_warm <- function(x)
+  case_when(is.na(x)~NA_real_, x<=15~4, x<=30~3, x<=50~2, x<=70~1, TRUE~0)
+S_inv_MAF_cold <- function(x)
+  case_when(is.na(x)~NA_real_, x<=5~4, x<=15~3, x<=30~2, x<=60~1, TRUE~0)
+S_inv_MAF_phenological <- function(x, season)
+  case_when(season=="WARM"~S_inv_MAF_warm(x), TRUE~S_inv_MAF_cold(x))
+classify_RISI <- function(x)
+  case_when(is.na(x)~NA_character_, x>=7.5~"High", x>=6.0~"Good",
+            x>=4.5~"Moderate", x>=3.5~"Poor", TRUE~"Bad")
+build_coralnet_url <- function(loc, yr = NULL) {
+  base <- paste0("https://coralnet.ucsd.edu/source/2897/browse/images/?aux3=",
+                 gsub(" ", "+", loc), "&aux5=MIDTIDE")
+  if (!is.null(yr) && yr != "ALL")
+    base <- paste0(base, "&photo_date_0=year&photo_date_1=", yr)
+  base
+}
+
+# HTML pill control rendered on top of the leaflet map
+risi_pills_html <- HTML(paste0(
+  '<div style="background:rgba(255,255,255,0.95);padding:7px 11px;border-radius:7px;',
+  'box-shadow:0 1px 6px rgba(0,0,0,0.2);pointer-events:none;">',
+  '<div style="font-size:12px;font-weight:700;color:#1b2a3b;border-left:3px solid #2ecc71;',
+  'padding-left:7px;margin-bottom:5px;">Estado ecológico (RISI)</div>',
+  '<div style="display:flex;gap:3px;flex-wrap:wrap;">',
+  '<span style="background:#3B7EA1;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">High ≥7.5</span>',
+  '<span style="background:#66C2A5;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Good 6–7.5</span>',
+  '<span style="background:#c9a800;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Moderate 4.5–6</span>',
+  '<span style="background:#FB8C00;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Poor 3.5–4.5</span>',
+  '<span style="background:#B71C1C;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Bad &lt;3.5</span>',
+  '</div></div>'
+))
+```
+
+```{r reactives, include=FALSE}
+AMP_filtrado <- reactive({
+  df <- AMP
+  if (!is.null(input$sel_localidad) && input$sel_localidad!="ALL") df <- df %>% filter(locality==input$sel_localidad)
+  if (!is.null(input$sel_year)      && input$sel_year!="ALL")      df <- df %>% filter(year==as.integer(input$sel_year))
+  if (!is.null(input$sel_estacion)  && input$sel_estacion!="ALL")  df <- df %>% filter(estacion==input$sel_estacion)
+  df
+})
+
+AMP_index <- reactive({
+  df <- AMP_filtrado()
+  req(nrow(df)>0, all(c("strata","MOB","MAF","SC","Season") %in% names(df)))
+  if (!"MASR"%in%names(df)) df$MASR<-0
+  if (!"MAEN"%in%names(df)) df$MAEN<-0
+  if (!"MAS" %in%names(df)) df$MAS <-0
+  df %>% filter(strata=="MIDTIDE") %>%
+    mutate(
+      across(c(MOB,MASR,MAS,MAEN,MAF,SC), as.numeric),
+      MASR_cov=coalesce(MASR,0), MAS_group=coalesce(MAS,0), MAEN_cov=coalesce(MAEN,0),
+      BIO=pmin(100, coalesce(MOB,0)+masr_factor*MASR_cov+mas_factor*MAS_group+maen_factor*MAEN_cov),
+      S_BIO=if_else((MAS_group>0)&(coalesce(MOB,0)<MOB_threshold)&(MASR_cov<MASR_threshold),1,S_bio_fun(BIO)),
+      S_MAF=S_inv_MAF_phenological(coalesce(MAF,0),Season),
+      S_SC=S_inv_SC(coalesce(SC,0)), S_DIST=w_MAF*S_MAF+w_SC*S_SC,
+      num=W_core["BIO"]*S_BIO+W_core["DIST"]*S_DIST,
+      RISI_raw=(num/Wsum4_core)*10, SC_val=coalesce(SC,0),
+      RISI=if_else(SC_val>=SC_collapse_thresh&coalesce(MOB,0)<MOB_collapse_thresh,pmin(RISI_raw,RISI_collapse_cap),RISI_raw),
+      RISI_class=factor(classify_RISI(RISI),levels=RISI_levels,ordered=TRUE)
+    )
+})
+
+indice_resumen_mapa <- reactive({
+  df <- AMP_index()
+  req(nrow(df)>0)
+  df <- df %>% filter(!is.na(Latitude),!is.na(Longitude)); req(nrow(df)>0)
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad!="ALL"
+  if (by_site)
+    df %>% group_by(locality,site) %>%
+      summarise(lon=mean(as.numeric(Longitude),na.rm=T),lat=mean(as.numeric(Latitude),na.rm=T),
+                RISI_mean=mean(RISI,na.rm=T),n_fotos=n(),.groups="drop") %>%
+      mutate(RISI_class=factor(classify_RISI(RISI_mean),levels=RISI_levels,ordered=T),
+             etiqueta=site, sigla=site)
+  else
+    df %>% group_by(locality) %>%
+      summarise(lon=mean(as.numeric(Longitude),na.rm=T),lat=mean(as.numeric(Latitude),na.rm=T),
+                RISI_mean=mean(RISI,na.rm=T),n_fotos=n(),.groups="drop") %>%
+      mutate(RISI_class=factor(classify_RISI(RISI_mean),levels=RISI_levels,ordered=T),
+             etiqueta=locality,
+             sigla=ifelse(locality %in% names(siglas_localidades), siglas_localidades[locality], locality))
+})
+
+cover_resumen <- reactive({
+  df <- AMP_filtrado(); req(nrow(df)>0)
+  x_var <- if (!is.null(input$sel_localidad)&&input$sel_localidad!="ALL") "site" else "locality"
+  df %>%
+    select(locality,site,Latitude,strata,estacion,all_of(catami_seleccion)) %>%
+    pivot_longer(all_of(catami_seleccion),names_to="CATAMI",values_to="Cobertura") %>%
+    mutate(CATAMI=recode(CATAMI,!!!catami_dicc)) %>%
+    group_by(across(all_of(c(x_var,"locality","strata","estacion","CATAMI")))) %>%
+    summarise(Cobertura=mean(Cobertura,na.rm=T),Latitude=mean(Latitude,na.rm=T),.groups="drop") %>%
+    filter(Cobertura>0) %>%
+    mutate(
+      eje_x=if(x_var=="locality") fct_reorder(.data[[x_var]],Latitude,.desc=T) else .data[[x_var]],
+      strata=factor(strata,levels=c("HIGHTIDE","MIDTIDE","LOWTIDE"),
+                    labels=c("Intermareal alto","Intermareal medio","Intermareal bajo")),
+      estacion=factor(estacion,levels=c("Cálida","Fría"))
+    )
+})
+
+conteo_indice_clases <- reactive({
+  df <- AMP_index(); req(nrow(df)>0)
+  df <- df %>% mutate(RISI_class=factor(as.character(RISI_class),levels=RISI_levels,ordered=T))
+  by_site <- !is.null(input$sel_localidad)&&input$sel_localidad!="ALL"
+  if(by_site)
+    df %>% count(locality,site,RISI_class,name="n_fotos") %>%
+      mutate(etiqueta=fct_reorder(site,n_fotos,.fun=sum,.desc=T))
+  else
+    df %>% count(locality,RISI_class,name="n_fotos") %>%
+      mutate(etiqueta=fct_reorder(locality,n_fotos,.fun=sum,.desc=T))
+})
+
+fotos_por_anio_estacion <- reactive({
+  AMP_filtrado() %>% filter(!is.na(year),!is.na(estacion)) %>%
+    count(year,estacion,name="n_fotos") %>% arrange(year,estacion)
+})
+
+resumen_muestreo <- reactive({
+  df <- AMP_filtrado()
+  list(n_fotos=nrow(df), area_m2=round(nrow(df)*0.0625,0),
+       n_dias=n_distinct(df$Date[!is.na(df$Date)]),
+       n_localidades=n_distinct(df$locality), n_sitios=n_distinct(df$site))
+})
+
+output$download_csv <- downloadHandler(
+  filename=function() paste0("RISI_datos_MIDTIDE_",Sys.Date(),".csv"),
+  content=function(file) {
+    # RISI is only computed for MIDTIDE — export only those rows to avoid NAs
+    ri <- isolate(AMP_index()) %>%
+      select(Name, locality, site, strata, Date, year, estacion, Season,
+             Latitude, Longitude, any_of(catami_seleccion),
+             RISI, RISI_class, BIO, S_BIO, S_DIST, RISI_raw)
+    write.csv(ri, file, row.names=FALSE, fileEncoding="UTF-8")
+  }
+)
+
+output$catami_img <- renderImage(
+  list(src="CATAMI.png",contentType="image/png",style="max-width:100%;height:auto;"),
+  deleteFile=FALSE
+)
+
+output$catami_modal_img <- renderImage(
+  list(src="CATAMI.png",contentType="image/png",style="max-width:100%;height:auto;"),
+  deleteFile=FALSE
+)
+
+observeEvent(input$show_catami_modal, {
+  showModal(modalDialog(
+    title = "Clasificación CATAMI — Categorías bentónicas",
+    tags$style(".modal-dialog { max-width: 92vw !important; width: 92vw !important; }
+                .modal-body img { width: 100%; height: auto; }"),
+    imageOutput("catami_modal_img", height="auto"),
+    easyClose = TRUE,
+    size = "l",
+    footer = modalButton("Cerrar")
+  ))
+})
+
+observeEvent(input$show_risi_modal, {
+  showModal(modalDialog(
+    title = "Índice RISI — Rocky Intertidal Status Index",
+    easyClose = TRUE, size = "l",
+    footer = modalButton("Cerrar"),
+    HTML('
+<div style="font-size:13px;color:#2d3748;line-height:1.7;font-family:inherit;">
+
+<p>El <strong>RISI</strong> (Bravo et al. 2026, <em>Environmental Research</em>) es un índice multimétrico diseñado para medir el estado ecológico del intermareal rocoso a partir de fotocuadrantes del <strong>intermareal medio (MIDTIDE)</strong>. Sigue el marco conceptual del Ecosystem-Based Quality Index (EBQI, Personnic et al. 2014), integrando múltiples componentes ecológicos en una única métrica basada en su rol funcional. El índice refleja el <strong>balance entre estructura biogénica e indicadores de estado perturbado</strong> de la comunidad. Los puntajes se estiman a partir de coberturas bentónicas obtenidas mediante clasificación automática con IA (CoralNet).</p>
+
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
+
+<!-- BIO -->
+<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px;">Compartimento BIO — peso 25</p>
+
+<p>Representa la contribución de los <strong>organismos formadores de hábitat</strong>. Las cuatro categorías CATAMI se ponderan según su importancia ecológica y funcional relativa: MOB (lecho de mejillones) recibe el mayor peso por su rol dominante como ingeniero de ecosistema; MASR, MAS y MAEN contribuyen con pesos decrecientes que reflejan su menor rol estructural:</p>
+
+<p style="background:#f7fafc;border-left:3px solid #4a90d9;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;">
+BIO = MOB + 0.8·MASR + 0.4·MAS + 0.25·MAEN
+</p>
+
+<p style="font-size:12px;color:#718096;background:#fffdf0;border-left:3px solid #e6b800;padding:7px 10px;border-radius:4px;">
+<strong>Condición de ajuste:</strong> cuando MAS &gt; 0%, MOB &lt; 5% y MASR &lt; 10%, S_BIO se acota a 1. Esta restricción se aplica cuando la comunidad está dominada por algas oportunistas sin estructura biogénica significativa.
+</p>
+
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
+
+<!-- DIST -->
+<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px;">Compartimento DIST — peso 20</p>
+
+<p>Integra dos señales de <strong>reducción de la condición biogénica</strong>: la cobertura de macroalgas filamentosas (MAF), que refleja perturbación aguda y reversible, y el sustrato desnudo consolidado (SC), que refleja pérdida más persistente de estructura biogénica. El mayor peso de SC (0.6) refleja su carácter menos reversible respecto a la cobertura filamentosa efímera:</p>
+
+<p style="background:#f7fafc;border-left:3px solid #4a90d9;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;">
+S_DIST = 0.4·S_MAF + 0.6·S_SC
+</p>
+
+<p style="margin:10px 0 4px 0;font-size:12px;"><strong>S_MAF — Macroalgas filamentosas.</strong> MAF exhibió un patrón estacional significativo en la cobertura media, con valores más altos en temporada CÁLIDA que FRÍA. Para corregir esta variación fenológica, se aplicaron umbrales diferenciados por estación, de modo que los scores sean comparables a lo largo del ciclo anual:</p>
+<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
+  <tr style="background:#edf2f7;"><th style="padding:5px 8px;">S_MAF</th><th style="padding:5px 8px;">Temporada Cálida (WARM)</th><th style="padding:5px 8px;">Temporada Fría (COLD)</th></tr>
+  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>4</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 15%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 5%</td></tr>
+  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>3</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 30%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 15%</td></tr>
+  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>2</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 50%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 30%</td></tr>
+  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>1</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 70%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 60%</td></tr>
+  <tr><td style="padding:4px 8px;text-align:center;"><strong>0</strong></td><td style="padding:4px 8px;">MAF &gt; 70%</td><td style="padding:4px 8px;">MAF &gt; 60%</td></tr>
+</table>
+
+<p style="margin:0 0 4px 0;font-size:12px;"><strong>S_SC — Sustrato desnudo consolidado.</strong> Refleja pérdida persistente de estructura biogénica; umbrales iguales para ambas temporadas:</p>
+<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
+  <tr style="background:#edf2f7;"><th style="padding:5px 8px;">S_SC</th><th style="padding:5px 8px;">Condición (SC)</th></tr>
+  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>4</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 5%</td></tr>
+  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>3</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 15%</td></tr>
+  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>2</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 30%</td></tr>
+  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>1</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 60%</td></tr>
+  <tr><td style="padding:4px 8px;text-align:center;"><strong>0</strong></td><td style="padding:4px 8px;">SC &gt; 60%</td></tr>
+</table>
+
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
+
+<!-- Fórmula final -->
+<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px;">Cálculo e integración final</p>
+<p>Los puntajes de cada compartimento (0–4) se integran en un marco ponderado y normalizado a escala 0–10. Los pesos reflejan la importancia ecológica relativa de cada compartimento, con BIO como factor de mayor influencia:</p>
+<p style="background:#f7fafc;border-left:3px solid #2ecc71;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;">
+RISI = (25·S_BIO + 20·S_DIST) / 180 × 10
+</p>
+<p style="font-size:12px;color:#718096;margin-top:4px;">El denominador 180 = (25 + 20) × 4 es el máximo teórico posible (score perfecto en ambos compartimentos).</p>
+
+<p style="font-size:12px;color:#718096;background:#fff5f5;border-left:3px solid #B71C1C;padding:7px 10px;border-radius:4px;margin-top:8px;">
+<strong>Condición de colapso estructural:</strong> cuando SC ≥ 85% <em>y</em> MOB &lt; 10%, la comunidad se considera en colapso estructural. En este caso, el RISI se acota a un máximo de <strong>2.0</strong>, independientemente del puntaje calculado.
+</p>
+
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
+
+<!-- Clasificación -->
+<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px;">Clasificación ecológica</p>
+<p style="font-size:12px;color:#718096;margin-bottom:8px;">Los umbrales son no uniformes para aumentar la sensibilidad en condiciones intermedias, donde diferencias pequeñas pueden reflejar cambios ecológicos significativos en la estructura de la comunidad:</p>
+<div style="display:flex;gap:6px;flex-wrap:wrap;">
+  <span style="background:#3B7EA1;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">High 7.5–10.0</span>
+  <span style="background:#66C2A5;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Good 6.0–7.49</span>
+  <span style="background:#c9a800;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Moderate 4.5–5.99</span>
+  <span style="background:#FB8C00;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Poor 3.5–4.49</span>
+  <span style="background:#B71C1C;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Bad 0.0–3.49</span>
+</div>
+
+<p style="margin-top:14px;font-size:11px;color:#a0aec0;font-style:italic;">Bravo et al. 2026 · <em>Environmental Research</em> · MBON Pole to Pole · IOC-UNESCO Ocean Best Practices</p>
+</div>
+    ')
+  ))
+})
+
+# ── Fotocuadrantes tab: independent filters ──────────────────
+AMP_filtrado_fc <- reactive({
+  df <- AMP
+  if (!is.null(input$sel_loc_fc)  && input$sel_loc_fc!="ALL")  df <- df %>% filter(locality==input$sel_loc_fc)
+  if (!is.null(input$sel_year_fc) && input$sel_year_fc!="ALL") df <- df %>% filter(year==as.integer(input$sel_year_fc))
+  if (!is.null(input$sel_est_fc)  && input$sel_est_fc!="ALL")  df <- df %>% filter(estacion==input$sel_est_fc)
+  df
+})
+
+output$fotocuadrante_img <- renderImage(
+  list(src="fotocuadrante.png",contentType="image/png",
+       style="max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;box-shadow:0 1px 6px rgba(0,0,0,0.15);"),
+  deleteFile=FALSE
+)
+
+output$mapa_sitios <- renderLeaflet({
+  df <- AMP_filtrado_fc()
+  req(nrow(df)>0, all(c("Latitude","Longitude","strata") %in% names(df)))
+  df <- df %>% filter(!is.na(Latitude),!is.na(Longitude))
+  req(nrow(df)>0)
+
+  pal_strata <- colorFactor(
+    palette = c("#e74c3c","#3498db","#2ecc71"),
+    domain  = c("HIGHTIDE","MIDTIDE","LOWTIDE")
+  )
+  lng_r <- range(as.numeric(df$Longitude),na.rm=T)
+  lat_r <- range(as.numeric(df$Latitude), na.rm=T)
+  pad   <- max(diff(lng_r),diff(lat_r)) * 0.15
+
+  leaflet(df, options=leafletOptions(zoomSnap=0.25)) %>%
+    addProviderTiles(providers$Esri.WorldImagery,group="Satélite") %>%
+    addProviderTiles(providers$CartoDB.Positron, group="Mapa") %>%
+    addCircleMarkers(
+      lng=~as.numeric(Longitude), lat=~as.numeric(Latitude),
+      radius=4, weight=0.7, fillOpacity=0.85,
+      color=~pal_strata(strata), fillColor=~pal_strata(strata),
+      popup=~paste0("<b>",locality,"</b><br>Sitio: ",site,
+                    "<br>Estrato: ",strata,"<br>Fecha: ",Date)
+    ) %>%
+    addLegend("bottomright",pal=pal_strata,values=~strata,
+              title="Estrato",opacity=0.9,
+              labFormat=labelFormat(transform=function(x) c("Intermareal alto","Intermareal medio","Intermareal bajo"))) %>%
+    addScaleBar("topleft",options=scaleBarOptions(imperial=FALSE,maxWidth=100)) %>%
+    addLayersControl(baseGroups=c("Satélite","Mapa"),options=layersControlOptions(collapsed=TRUE)) %>%
+    fitBounds(lng_r[1]-pad,lat_r[1]-pad,lng_r[2]+pad,lat_r[2]+pad)
+})
+```
+
+# Resultados
+
+## Sidebar {.sidebar}
+
+```{r sidebar_ui}
+tags$div(class="sidebar-inner",
+  tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
+  selectInput("sel_localidad","Parque / Localidad",choices=c("Todos"="ALL",localidades),selected="ALL"),
+  selectInput("sel_year","Año",choices=c("Todos"="ALL",anios),selected="ALL"),
+  selectInput("sel_estacion","Estación",choices=c("Todas"="ALL","Cálida"="Cálida","Fría"="Fría"),selected="ALL"),
+  downloadButton("download_csv",label="⬇ Descargar datos CSV")
+)
+renderUI({
+  r <- resumen_muestreo()
+  tags$div(class="kpi-strip",
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Fotocuadrantes"),tags$span(class="kpi-value",format(r$n_fotos,big.mark="."))),
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Área equiv."),tags$span(class="kpi-value",paste0(r$area_m2," m²"))),
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Días de campo"),tags$span(class="kpi-value",r$n_dias)),
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Localidades / Sitios"),tags$span(class="kpi-value",paste0(r$n_localidades," / ",r$n_sitios)))
+  )
+})
+```
+
+## Column {data-width=460}
+
+### MAPA Índice RISI
+
+```{r main_map}
+leafletOutput("mapa_indice", height="100%", width="100%")
+```
+
+```{r main_map_server, include=FALSE}
+output$mapa_indice <- renderLeaflet({
+  pts <- indice_resumen_mapa(); req(nrow(pts)>0)
+  pts <- pts %>% mutate(radius=rescale(RISI_mean,to=c(7,20),from=c(0,10)))
+  pal_class <- colorFactor(palette=unname(class_cols[RISI_levels]),domain=RISI_levels,ordered=TRUE)
+  titulo_popup <- if(!is.null(input$sel_localidad)&&input$sel_localidad!="ALL") "Sitio" else "Localidad"
+  lng_r <- range(pts$lon,na.rm=T); lat_r <- range(pts$lat,na.rm=T)
+
+  m <- leaflet(pts,options=leafletOptions(zoomSnap=0.25)) %>%
+    addProviderTiles(providers$Esri.WorldImagery,group="Satélite") %>%
+    addProviderTiles(providers$CartoDB.Positron, group="Mapa") %>%
+    addCircleMarkers(
+      lng=~lon,lat=~lat,radius=~radius,weight=1,
+      color="white",fillColor=~pal_class(as.character(RISI_class)),fillOpacity=0.9,
+      label=~sigla,
+      labelOptions=labelOptions(
+        permanent=TRUE, noHide=TRUE, textOnly=TRUE, direction="center",
+        style=list(
+          "color"="#1b2a3b","font-weight"="bold","font-size"="10px",
+          "text-shadow"="1px 1px 0 white,-1px -1px 0 white,1px -1px 0 white,-1px 1px 0 white"
+        )
+      ),
+      popup=~paste0(
+        "<b>",titulo_popup,":</b> ",etiqueta,
+        if(titulo_popup=="Sitio") paste0("<br><i>",locality,"</i>") else "",
+        "<br><b>RISI:</b> ",round(RISI_mean,2),
+        "<br><b>Clase:</b> <strong>",as.character(RISI_class),"</strong>",
+        "<br><b>Fotos MIDTIDE:</b> ",n_fotos
+      )
+    ) %>%
+    # ── Classification card overlaid on map (survives zoom) ──
+    addControl(html=risi_pills_html, position="topright") %>%
+    addScaleBar("bottomleft",options=scaleBarOptions(imperial=FALSE,maxWidth=100)) %>%
+    addLayersControl(baseGroups=c("Satélite","Mapa"),options=layersControlOptions(collapsed=TRUE))
+
+  pad <- if(diff(lng_r) < 0.002) 0 else max(diff(lng_r), diff(lat_r)) * 0.15
+  if(diff(lng_r) < 0.002) m %>% setView(lng=mean(pts$lon),lat=mean(pts$lat),zoom=10)
+  else m %>% fitBounds(lng_r[1]-pad, lat_r[1]-pad, lng_r[2]+pad, lat_r[2]+pad)
+})
+```
+
+## Column {data-width=540 .scrollable}
+
+### Análisis
+
+```{r right_panel}
+tags$div(class="scroll-content",
+
+  # ── CATAMI ──────────────────────────────────────────────────
+  tags$div(class="chart-block",
+    tags$div(style="display:flex;align-items:center;gap:8px;margin-bottom:4px;",
+      tags$p(class="section-title",style="margin:0;","Cobertura bentónica por categorías CATAMI"),
+      actionLink("show_catami_modal",
+        tags$span(style="
+          display:inline-flex;align-items:center;justify-content:center;
+          width:16px;height:16px;border-radius:50%;
+          background:#e8ecf0;color:#5d7a96;font-size:10px;font-weight:700;
+          cursor:pointer;border:1px solid #c8d6e0;line-height:1;",
+          "?")
+      )
+    ),
+    tags$p(class="section-desc",HTML(
+      'Cobertura media (%) por localidad (sigla) o sitio, separada por estrato y estación.
+       Pasá el cursor sobre las barras para ver el nombre completo y el valor exacto.'
+    )),
+    plotlyOutput("barras_catami",height="400px")
+  ),
+
+  # ── Functional groups ───────────────────────────────────────
+  tags$div(class="chart-block",
+    tags$p(class="section-title","Cobertura por grupos funcionales"),
+    tags$p(class="section-desc",
+      "Algas (MAEN + MAEC + MAA + MAS + MASR + MAF + MAG + MALCB), Invertebrados (MOB + CRB + MOG) y Suelo desnudo (SC)."
+    ),
+    plotlyOutput("barras_grupos",height="380px")
+  ),
+
+  # ── MOB trend (visible only when all years selected) ────────
+  conditionalPanel(
+    condition = "input.sel_year === 'ALL'",
+    tags$div(class="chart-block",
+      tags$p(class="section-title","Tendencia de cobertura de bivalvos (MOB)"),
+      tags$p(class="section-desc",
+        "Evolución temporal de la cobertura media (%) de bivalvos (MOB) en el intermareal medio (MIDTIDE) por localidad. Permite detectar tendencias de largo plazo. Visible cuando se seleccionan todos los años."
+      ),
+      plotlyOutput("trend_mob", height="360px")
+    )
+  ),
+
+  # ── RISI class bars ─────────────────────────────────────────
+  tags$div(class="chart-block",
+    tags$div(style="display:flex;align-items:center;gap:8px;margin-bottom:4px;",
+      tags$p(class="section-title",style="margin:0;","Distribución de clases RISI (MIDTIDE)"),
+      actionLink("show_risi_modal",
+        tags$span(style="
+          display:inline-flex;align-items:center;justify-content:center;
+          width:16px;height:16px;border-radius:50%;
+          background:#e8ecf0;color:#5d7a96;font-size:10px;font-weight:700;
+          cursor:pointer;border:1px solid #c8d6e0;line-height:1;", "?")
+      )
+    ),
+    uiOutput("btn_coralnet"),
+    plotlyOutput("barras_indice_clases",height="340px")
+  ),
+
+)
+```
+
+```{r right_servers, include=FALSE}
+output$barras_catami <- renderPlotly({
+  df_cov <- cover_resumen(); req(nrow(df_cov)>0)
+  by_site <- !is.null(input$sel_localidad)&&input$sel_localidad!="ALL"
+  x_label <- if(by_site) "Sitio" else "Localidad"
+
+  cats <- unique(df_cov$CATAMI); cols <- colores_catami_fixed[cats]; falt <- is.na(cols)
+  if(any(falt)) cols[falt] <- brewer.pal(max(3,sum(falt)),"Paired")[seq_len(sum(falt))]
+
+  # x-axis: show siglas for localities, full name for sites
+  label_fn <- if (!by_site) {
+    function(x) ifelse(x %in% names(siglas_localidades), siglas_localidades[x], x)
+  } else {
+    function(x) x
+  }
+
+  p <- ggplot(df_cov, aes(x=eje_x, y=Cobertura, fill=CATAMI,
+    text=paste0(x_label,": ",eje_x,"<br>CATAMI: ",CATAMI,"<br>Cobertura: ",round(Cobertura,1),"%"))) +
+    geom_col() +
+    facet_grid(estacion~strata) +
+    scale_x_discrete(labels=label_fn) +
+    scale_fill_manual(values=cols,name="CATAMI") +
+    labs(x=x_label,y="Cobertura media (%)") +
+    theme_minimal(base_size=10) +
+    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5,size=8),
+          strip.text=element_text(face="bold",size=9))
+
+  ggplotly(p,tooltip="text") %>%
+    layout(
+      legend=list(orientation="h", xanchor="center", x=0.5, y=-0.72,
+                  font=list(size=9)),
+      margin=list(b=230, t=20)
+    ) %>%
+    config(displayModeBar = FALSE)
+})
+
+output$btn_coralnet <- renderUI({
+  if(is.null(input$sel_localidad)||input$sel_localidad=="ALL")
+    tags$small(style="color:#aaa;font-size:11px;","Seleccioná una localidad para ver fotos en CoralNet.")
+  else {
+    yr  <- input$sel_year
+    lbl <- if (!is.null(yr) && yr != "ALL")
+             paste0("📷 Ver fotos MIDTIDE en CoralNet: ", input$sel_localidad, " (", yr, ")")
+           else
+             paste0("📷 Ver fotos MIDTIDE en CoralNet: ", input$sel_localidad)
+    tags$a(href=build_coralnet_url(input$sel_localidad, yr), target="_blank",
+           class="coralnet-link", lbl)
+  }
+})
+
+output$trend_mob <- renderPlotly({
+  req(is.null(input$sel_year) || input$sel_year == "ALL")
+  df <- AMP_filtrado()
+  req(nrow(df) > 0, "MOB" %in% names(df))
+
+  df_mob <- df %>%
+    filter(strata == "MIDTIDE", !is.na(MOB), !is.na(year)) %>%   # MIDTIDE only
+    mutate(MOB = as.numeric(MOB)) %>%
+    group_by(locality, year) %>%
+    summarise(
+      MOB_mean = mean(MOB, na.rm = TRUE),
+      n        = n(),
+      .groups  = "drop"
+    ) %>%
+    mutate(sigla = ifelse(locality %in% names(siglas_localidades),
+                          siglas_localidades[locality], locality))
+  req(nrow(df_mob) > 0)
+
+  # Dynamic palette: enough colors for any number of localities
+  n_loc  <- n_distinct(df_mob$locality)
+  pal_mob <- colorRampPalette(c(
+    "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+    "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
+    "#aec7e8","#ffbb78","#98df8a","#ff9896","#c5b0d5"
+  ))(n_loc)
+
+  p <- ggplot(df_mob,
+    aes(x = year, y = MOB_mean, color = locality, group = locality,
+        text = paste0("Localidad: ", locality,
+                      "<br>Año: ", year,
+                      "<br>MOB medio (MIDTIDE): ", round(MOB_mean, 1), "%",
+                      "<br>N fotos: ", n))) +
+    geom_line(linewidth = 0.8, alpha = 0.6) +
+    geom_point(size = 1.8, alpha = 0.75) +
+    scale_x_continuous(breaks = sort(unique(df_mob$year))) +
+    scale_color_manual(values = pal_mob, name = "Localidad") +
+    labs(x = "Año", y = "Cobertura media MOB (%)") +
+    theme_minimal(base_size = 10) +
+    theme(
+      legend.position  = "right",
+      panel.grid.minor = element_blank(),
+      axis.text.x      = element_text(angle = 45, hjust = 1)
+    )
+
+  ggplotly(p, tooltip = "text") %>%
+    layout(legend = list(font = list(size = 9)),
+           margin = list(t = 10, r = 120)) %>%
+    config(displayModeBar = FALSE)
+})
+
+output$barras_indice_clases <- renderPlotly({
+  dfc <- conteo_indice_clases(); req(nrow(dfc)>0)
+  by_site <- !is.null(input$sel_localidad)&&input$sel_localidad!="ALL"
+  etiq_y  <- if(by_site) "Sitio" else "Localidad"
+  # Show siglas on y-axis for localities
+  label_fn <- if(!by_site) {
+    function(x) ifelse(x%in%names(siglas_localidades),siglas_localidades[x],x)
+  } else function(x) x
+
+  p <- ggplot(dfc,aes(x=etiqueta,y=n_fotos,fill=RISI_class,
+    text=paste0(etiq_y,": ",etiqueta,"<br>Clase: ",RISI_class,"<br>N: ",n_fotos))) +
+    geom_col(width=0.7) + coord_flip() +
+    scale_x_discrete(labels=label_fn) +
+    scale_fill_manual(values=class_cols,drop=FALSE) +
+    labs(x=etiq_y,y="N° fotocuadrantes (MIDTIDE)",fill="Clase RISI") +
+    theme_minimal(base_size=10) +
+    theme(legend.position="top",legend.title=element_text(face="bold",size=9),
+          axis.text.y=element_text(size=9))
+  ggplotly(p,tooltip="text") %>% config(displayModeBar = FALSE)
+})
+
+output$plot_anio_estacion <- renderPlotly({
+  df <- fotos_por_anio_estacion(); req(nrow(df)>0)
+  p <- ggplot(df,aes(x=factor(year),y=n_fotos,fill=estacion)) +
+    geom_col(position="dodge",width=0.65) +
+    scale_fill_manual(values=c("Cálida"="#E8522A","Fría"="#3B7EA1"),name="Estación") +
+    labs(x="Año",y="Fotocuadrantes") +
+    theme_minimal(base_size=10) +
+    theme(legend.position="top",panel.grid.major.x=element_blank())
+  ggplotly(p) %>% config(displayModeBar = FALSE)
+})
+
+output$barras_grupos <- renderPlotly({
+  df <- AMP_filtrado(); req(nrow(df)>0)
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad!="ALL"
+  x_var   <- if(by_site) "site" else "locality"
+  x_label <- if(by_site) "Sitio" else "Localidad"
+
+  algas_cols <- intersect(c("MAEN","MAEC","MAA","MAS","MASR","MAF","MAG","MALCB"), names(df))
+  invert_cols <- intersect(c("MOB","CRB","MOG"), names(df))
+
+  df2 <- df %>%
+    mutate(
+      Algas         = rowSums(across(all_of(algas_cols),  ~as.numeric(.)), na.rm=TRUE),
+      Invertebrados = rowSums(across(all_of(invert_cols), ~as.numeric(.)), na.rm=TRUE),
+      `Suelo desnudo` = as.numeric(coalesce(SC, 0))
+    ) %>%
+    select(all_of(x_var), locality, strata, estacion, Latitude, Algas, Invertebrados, `Suelo desnudo`) %>%
+    pivot_longer(cols=c(Algas,Invertebrados,`Suelo desnudo`), names_to="Grupo", values_to="Cobertura") %>%
+    group_by(across(all_of(c(x_var,"locality","strata","estacion","Grupo")))) %>%
+    summarise(Cobertura=mean(Cobertura,na.rm=T), Latitude=mean(Latitude,na.rm=T), .groups="drop") %>%
+    filter(Cobertura>0) %>%
+    mutate(
+      eje_x    = if(x_var=="locality") fct_reorder(.data[[x_var]],Latitude,.desc=T) else .data[[x_var]],
+      strata   = factor(strata,levels=c("HIGHTIDE","MIDTIDE","LOWTIDE"),
+                        labels=c("Intermareal alto","Intermareal medio","Intermareal bajo")),
+      estacion = factor(estacion,levels=c("Cálida","Fría")),
+      Grupo    = factor(Grupo, levels=c("Algas","Invertebrados","Suelo desnudo"))
+    )
+
+  req(nrow(df2)>0)
+  label_fn <- if(!by_site) function(x) ifelse(x%in%names(siglas_localidades),siglas_localidades[x],x) else function(x) x
+
+  p <- ggplot(df2, aes(x=eje_x, y=Cobertura, fill=Grupo,
+    text=paste0(x_label,": ",eje_x,"<br>Grupo: ",Grupo,"<br>Cobertura: ",round(Cobertura,1),"%"))) +
+    geom_col() +
+    facet_grid(estacion~strata) +
+    scale_x_discrete(labels=label_fn) +
+    scale_fill_manual(
+      values=c("Algas"="#2ecc71","Invertebrados"="#3498db","Suelo desnudo"="#95a5a6"),
+      name="Grupo funcional") +
+    labs(x=x_label, y="Cobertura media (%)") +
+    theme_minimal(base_size=10) +
+    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5,size=8),
+          strip.text=element_text(face="bold",size=9))
+
+  ggplotly(p,tooltip="text") %>%
+    layout(legend=list(orientation="h",xanchor="center",x=0.5,y=-0.22,font=list(size=10)),
+           margin=list(b=100,t=20)) %>%
+    config(displayModeBar = FALSE)
+})
+```
+
+# Fotocuadrantes
+
+## Sidebar {.sidebar}
+
+```{r sidebar_fc}
+tags$div(class="sidebar-inner",
+  tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
+  selectInput("sel_loc_fc","Parque / Localidad",choices=c("Todos"="ALL",localidades),selected="ALL"),
+  selectInput("sel_year_fc","Año",choices=c("Todos"="ALL",anios),selected="ALL"),
+  selectInput("sel_est_fc","Estación",choices=c("Todas"="ALL","Cálida"="Cálida","Fría"="Fría"),selected="ALL")
+)
+renderUI({
+  loc <- input$sel_loc_fc
+  yr  <- input$sel_year_fc
+  if (!is.null(loc) && loc != "ALL") {
+    url <- build_coralnet_url(loc, yr)
+    lbl <- if (!is.null(yr) && yr != "ALL")
+             paste0("📷 Ver fotos – ", loc, " (", yr, ")")
+           else
+             paste0("📷 Ver fotos – ", loc)
+    tags$div(style="padding:10px 0 4px 0;",
+      tags$a(href=url, target="_blank",
+        style=paste0("display:block;width:100%;padding:8px 10px;background:#1e4d6b;",
+                     "border:1px solid #2c7a9a;border-radius:6px;color:#7dd3f0;",
+                     "font-size:11px;font-weight:700;text-align:center;text-decoration:none;",
+                     "word-break:break-word;line-height:1.4;"),
+        lbl
+      )
+    )
+  } else {
+    tags$div(style="padding:10px 0 4px 0;",
+      tags$small(style="color:#3d6b8a;font-size:11px;display:block;text-align:center;",
+        "Seleccioná una localidad para ver sus fotos en CoralNet")
+    )
+  }
+})
+renderUI({
+  df <- AMP_filtrado_fc()
+  r  <- list(
+    n_fotos       = nrow(df),
+    area_m2       = round(nrow(df)*0.0625,0),
+    n_dias        = n_distinct(df$Date[!is.na(df$Date)]),
+    n_localidades = n_distinct(df$locality),
+    n_sitios      = n_distinct(df$site)
+  )
+  tags$div(class="kpi-strip",
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Fotocuadrantes"),tags$span(class="kpi-value",format(r$n_fotos,big.mark="."))),
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Área equiv."),tags$span(class="kpi-value",paste0(r$area_m2," m²"))),
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Días de campo"),tags$span(class="kpi-value",r$n_dias)),
+    tags$div(class="kpi-item",tags$span(class="kpi-label","Localidades / Sitios"),tags$span(class="kpi-value",paste0(r$n_localidades," / ",r$n_sitios)))
+  )
+})
+```
+
+## Column {data-width=560}
+
+### Mapa de sitios de muestreo
+
+```{r fotomap}
+leafletOutput("mapa_sitios", height="100%", width="100%")
+```
+
+## Column {data-width=440}
+
+### Esfuerzo por año y estación {data-height=380}
+
+```{r effort_fotos}
+plotlyOutput("plot_esfuerzo_fc", height="320px")
+```
+
+```{r effort_fotos_server, include=FALSE}
+output$plot_esfuerzo_fc <- renderPlotly({
+  df <- AMP_filtrado_fc() %>% filter(!is.na(year),!is.na(estacion)) %>%
+    count(year,estacion,name="n_fotos") %>% arrange(year,estacion)
+  req(nrow(df)>0)
+  p <- ggplot(df,aes(x=factor(year),y=n_fotos,fill=estacion)) +
+    geom_col(position="dodge",width=0.65) +
+    scale_fill_manual(values=c("Cálida"="#E8522A","Fría"="#3B7EA1"),name="Estación") +
+    labs(x="Año",y="Fotocuadrantes") +
+    theme_minimal(base_size=10) +
+    theme(legend.position="top",panel.grid.major.x=element_blank())
+  ggplotly(p) %>% config(displayModeBar = FALSE)
+})
+```
+
+### Ejemplo de fotocuadrante {data-height=520}
+
+```{r foto_fc}
+tags$div(
+  style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:12px;",
+  tags$p(style="font-size:11px;color:#7f8c8d;margin-bottom:8px;text-align:center;",
+    "Fotocuadrante de 25×25 cm utilizado en el monitoreo del intermareal rocoso."),
+  imageOutput("fotocuadrante_img", height="auto")
+)
+```
+
+# Información
+
+## Column
+
+### &nbsp;
+
+```{r info_styled, echo=FALSE}
+s <- function(...) paste0(...)   # shorthand for style strings
+
+tags$div(style=s("max-width:760px;margin:0 auto;padding:36px 20px;",
+                 "font-size:14px;color:#3d4852;line-height:1.8;font-family:inherit;"),
+
+  # ── Title ─────────────────────────────────────────────────
+  tags$h2(style=s("font-size:22px;font-weight:700;color:#1e3a4a;margin:0 0 4px 0;",
+                  "border-bottom:3px solid #5ba4a4;display:inline-block;padding-bottom:4px;"),
+    "Monitoreo de Intermareales Rocosos"),
+  tags$p(style="font-size:13px;color:#7a9baa;margin:4px 0 28px 0;letter-spacing:0.3px;",
+    "MBON Pole to Pole · Costa Patagónica Argentina"),
+
+  # ── Intro ─────────────────────────────────────────────────
+  tags$p(HTML(
+    "Este dashboard fue desarrollado como parte del trabajo de investigación y monitoreo de
+     ecosistemas intermareales rocosos en la costa patagónica argentina, en el marco de la red
+     <strong>Marine Biodiversity Observation Network (MBON) Pole to Pole</strong>. El análisis integra
+     fotocuadrantes intermareales procesados mediante herramientas de <strong>inteligencia artificial</strong>,
+     permitiendo la visualización dinámica de patrones espaciales, temporales y ecológicos asociados a la
+     biodiversidad bentónica. Los agentes de conservación de <strong>Parques Nacionales</strong> y de
+     <strong>reservas provinciales</strong> son un componente fundamental de esta red, participando activamente
+     en el diseño del monitoreo y en la recolección sistemática de los fotocuadrantes que sustentan los
+     análisis presentados en este dashboard."
+  )),
+
+  tags$hr(style="border:none;border-top:1px solid #e4eaee;margin:24px 0;"),
+
+  # ── Proyecto ──────────────────────────────────────────────
+  tags$p(style="font-size:12px;color:#7a9baa;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin:0 0 8px 0;",
+    "Proyecto de Posdoctorado"),
+  tags$p(HTML("Este trabajo se enmarca en el <strong>proyecto de posdoctorado</strong> del:")),
+  tags$p(HTML(
+    "<strong>Dr. Gonzalo Bravo</strong><br>
+     <em>Implementación de herramientas de inteligencia artificial para el monitoreo de la biodiversidad marina en áreas protegidas</em>"
+  )),
+  tags$p(style="font-size:13px;color:#5d7a96;margin:0 0 2px 0;","Director: Dr. Gregorio Bigatti"),
+  tags$p(style="font-size:13px;color:#5d7a96;margin:0 0 12px 0;","Co-director: Dr. Enrique Montes Herrera"),
+  tags$p(HTML(
+    "El proyecto se desarrolla en articulación con instituciones científicas del <strong>CONICET</strong>
+     y administraciones de <strong>Áreas Naturales Protegidas</strong>, en el contexto de iniciativas
+     regionales e internacionales de monitoreo a largo plazo."
+  )),
+
+  tags$hr(style="border:none;border-top:1px solid #e4eaee;margin:24px 0;"),
+
+  # ── Publicaciones ─────────────────────────────────────────
+  tags$p(style="font-size:12px;color:#7a9baa;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin:0 0 10px 0;",
+    "Publicaciones y Protocolo"),
+  tags$p(HTML("Los resultados de los workshops fueron publicados en <em>Research Ideas and Outcomes (RIO Journal)</em>:")),
+  tags$ul(style="margin:0 0 12px 0;padding-left:18px;",
+    tags$li(tags$a(href="https://riojournal.com/article/126660/",target="_blank",
+      style="color:#2c7873;","MBON Intertidal Monitoring Workshop 2024")),
+    tags$li(tags$a(href="https://riojournal.com/article/163815/",target="_blank",
+      style="color:#2c7873;","MBON Intertidal Monitoring Workshop 2025"))
+  ),
+  tags$p(HTML("El protocolo oficial de muestreo está disponible en el repositorio de <em>Ocean Best Practices (IOC-UNESCO)</em>:")),
+  tags$ul(style="margin:0 0 20px 0;padding-left:18px;",
+    tags$li(tags$a(href="https://repository.oceanbestpractices.org/handle/11329/2199.2",
+      target="_blank",style="color:#2c7873;","Intertidal Monitoring Protocol – MBON Pole to Pole"))
+  ),
+
+  tags$hr(style="border:none;border-top:1px solid #e4eaee;margin:24px 0;"),
+
+  # ── Red + Contacto ────────────────────────────────────────
+  tags$div(style="display:flex;gap:32px;flex-wrap:wrap;",
+    tags$div(style="flex:1;min-width:240px;",
+      tags$p(style="font-size:12px;color:#7a9baa;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin:0 0 6px 0;",
+        "Red MBON"),
+      tags$p(HTML(
+        "Los datos y metodologías presentados forman parte de la red internacional
+         <strong>MBON – Pole to Pole</strong>, orientada a la observación estandarizada
+         de la biodiversidad marina a escala regional y global."
+      )),
+      tags$p(HTML("🔗 <strong>Más información sobre MBON:</strong>")),
+      tags$a(href="https://marinebon.org/p2p/",target="_blank",
+        style="font-size:13px;color:#2c7873;text-decoration:underline;",
+        "marinebon.org/p2p")
+    ),
+    tags$div(style="flex:1;min-width:240px;",
+      tags$p(style="font-size:12px;color:#7a9baa;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;margin:0 0 6px 0;",
+        "Contacto"),
+      tags$p(HTML("Para consultas técnicas, acceso a datos o colaboraciones:")),
+      tags$p(HTML("📧 <strong>Dr. Gonzalo Bravo</strong>")),
+      tags$a(href="mailto:gonzalobravoargentina@gmail.com",
+        style="font-size:13px;color:#2c7873;",
+        "gonzalobravoargentina@gmail.com")
+    )
+  ),
+
+  tags$p(style="margin-top:32px;font-size:12px;color:#a0b4be;font-style:italic;",
+    "Este dashboard es una herramienta dinámica en evolución, diseñada para apoyar la toma de decisiones, la gestión adaptativa y la comunicación científica.")
+)
+```
