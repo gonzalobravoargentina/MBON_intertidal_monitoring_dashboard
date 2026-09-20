@@ -203,9 +203,13 @@ S_inv_MAF_phenological <- function(x, season)
 classify_RISI <- function(x)
   case_when(is.na(x)~NA_character_, x>=7.5~"High", x>=6.0~"Good",
             x>=4.5~"Moderate", x>=3.5~"Poor", TRUE~"Bad")
-build_coralnet_url <- function(loc, yr = NULL) {
+# El estrato es un parámetro: Resultados pasa "MIDTIDE" (el RISI se calcula
+# sólo sobre ese estrato) y Fotocuadrantes pasa el que elija el usuario.
+build_coralnet_url <- function(loc, yr = NULL, strata = NULL) {
   base <- paste0("https://coralnet.ucsd.edu/source/2897/browse/images/?aux3=",
-                 gsub(" ", "+", loc), "&aux5=MIDTIDE")
+                 gsub(" ", "+", loc))
+  if (!is.null(strata) && strata != "ALL")
+    base <- paste0(base, "&aux5=", strata)
   if (!is.null(yr) && yr != "ALL")
     base <- paste0(base, "&photo_date_0=year&photo_date_1=", yr)
   base
@@ -442,12 +446,15 @@ RISI = (25·S_BIO + 20·S_DIST) / 180 × 10
   ))
 })
 
-# ── Fotocuadrantes tab: independent filters ──────────────────
+# ── Fotocuadrantes tab: localidad viene de Resultados (sel_localidad);
+#    año, estación y estrato son filtros propios de FC.
 AMP_filtrado_fc <- reactive({
   df <- AMP
-  if (!is.null(input$sel_loc_fc)  && input$sel_loc_fc!="ALL")  df <- df %>% filter(locality==input$sel_loc_fc)
-  if (!is.null(input$sel_year_fc) && input$sel_year_fc!="ALL") df <- df %>% filter(year==as.integer(input$sel_year_fc))
-  if (!is.null(input$sel_est_fc)  && input$sel_est_fc!="ALL")  df <- df %>% filter(estacion==input$sel_est_fc)
+  loc <- input$sel_localidad
+  if (!is.null(loc)                  && loc!="ALL")               df <- df %>% filter(locality==loc)
+  if (!is.null(input$sel_year_fc)   && input$sel_year_fc!="ALL")  df <- df %>% filter(year==as.integer(input$sel_year_fc))
+  if (!is.null(input$sel_est_fc)    && input$sel_est_fc!="ALL")   df <- df %>% filter(estacion==input$sel_est_fc)
+  if (!is.null(input$sel_strata_fc) && input$sel_strata_fc!="ALL")df <- df %>% filter(strata==input$sel_strata_fc)
   df
 })
 
@@ -600,8 +607,7 @@ tags$div(class="scroll-content",
 
   # ── Área apilada CATAMI (solo cuando se filtra localidad) ────
   conditionalPanel(
-    # La serie temporal sólo tiene sentido con todos los años a la vista
-    condition = "input.sel_localidad !== 'ALL' && input.sel_year === 'ALL'",
+    condition = "input.sel_localidad !== 'ALL'",
     tags$div(class="chart-block",
       tags$p(class="section-title","Evolución de la composición bentónica (MIDTIDE)"),
       tags$p(class="section-desc",
@@ -698,7 +704,9 @@ output$btn_coralnet <- renderUI({
              paste0("📷 Ver fotos MIDTIDE en CoralNet: ", input$sel_localidad, " (", yr, ")")
            else
              paste0("📷 Ver fotos MIDTIDE en CoralNet: ", input$sel_localidad)
-    tags$a(href=build_coralnet_url(input$sel_localidad, yr), target="_blank",
+    # MIDTIDE explícito: el RISI se calcula sólo sobre ese estrato,
+    # y la etiqueta del botón lo promete.
+    tags$a(href=build_coralnet_url(input$sel_localidad, yr, "MIDTIDE"), target="_blank",
            class="coralnet-link", lbl)
   }
 })
@@ -963,6 +971,17 @@ output$area_catami <- renderPlotly({
   })
   pl
 })
+
+# ── Sincronizar filtros Resultados → Fotocuadrantes ──────────
+# sel_localidad ya no tiene input propio en FC: AMP_filtrado_fc usa sel_localidad directamente.
+
+observeEvent(input$sel_year, {
+  updateSelectInput(session, "sel_year_fc", selected = input$sel_year)
+}, ignoreInit = TRUE)
+
+observeEvent(input$sel_estacion, {
+  updateSelectInput(session, "sel_est_fc", selected = input$sel_estacion)
+}, ignoreInit = TRUE)
 ```
 
 # Fotocuadrantes
@@ -972,19 +991,36 @@ output$area_catami <- renderPlotly({
 ```{r sidebar_fc}
 tags$div(class="sidebar-inner",
   tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
-  selectInput("sel_loc_fc","Parque / Localidad",choices=c("Todos"="ALL",localidades),selected="ALL"),
+  # Localidad: controlada desde Resultados, solo lectura en FC
+  tags$div(style="margin-bottom:10px;",
+    tags$label(style="font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;display:block;margin-bottom:3px;",
+               "Parque / Localidad"),
+    uiOutput("fc_loc_label")
+  ),
   selectInput("sel_year_fc","Año",choices=c("Todos"="ALL",anios),selected="ALL"),
-  selectInput("sel_est_fc","Estación",choices=c("Todas"="ALL","Cálida"="Cálida","Fría"="Fría"),selected="ALL")
+  selectInput("sel_est_fc","Estación",choices=c("Todas"="ALL","Cálida"="Cálida","Fría"="Fría"),selected="ALL"),
+  selectInput("sel_strata_fc","Estrato",choices=c("Todos"="ALL","HIGHTIDE","MIDTIDE","LOWTIDE"),selected="ALL")
 )
+output$fc_loc_label <- renderUI({
+  loc <- input$sel_localidad %||% "ALL"
+  lbl <- if (is.null(loc) || loc == "ALL") "Todos" else loc
+  tags$div(style=paste0("padding:5px 8px;background:#243b55;border:1px solid #34495e;",
+                        "border-radius:5px;color:#ecf0f1;font-size:13px;min-height:32px;",
+                        "display:flex;align-items:center;"),
+    tags$span(lbl),
+    tags$span(style="margin-left:auto;font-size:10px;color:#5d7a96;", "← desde Resultados")
+  )
+})
 renderUI({
-  loc <- input$sel_loc_fc
-  yr  <- input$sel_year_fc
+  loc    <- input$sel_localidad %||% "ALL"
+  yr     <- input$sel_year_fc
+  strata <- input$sel_strata_fc
   if (!is.null(loc) && loc != "ALL") {
-    url <- build_coralnet_url(loc, yr)
-    lbl <- if (!is.null(yr) && yr != "ALL")
-             paste0("📷 Ver fotos – ", loc, " (", yr, ")")
-           else
-             paste0("📷 Ver fotos – ", loc)
+    url <- build_coralnet_url(loc, yr, strata)
+    lbl_parts <- loc
+    if (!is.null(strata) && strata != "ALL") lbl_parts <- paste0(lbl_parts, " · ", strata)
+    if (!is.null(yr)     && yr     != "ALL") lbl_parts <- paste0(lbl_parts, " (", yr, ")")
+    lbl <- paste0("📷 Ver fotos – ", lbl_parts)
     tags$div(style="padding:10px 0 4px 0;",
       tags$a(href=url, target="_blank",
         style=paste0("display:block;width:100%;padding:8px 10px;background:#1e4d6b;",
@@ -1073,12 +1109,12 @@ output$plot_esfuerzo_fc <- renderPlotly({
 })
 
 # Matriz de completitud: qué se muestreó y qué falta, por sitio/localidad y año.
-# Usa sel_loc_fc (el filtro propio de la pestaña Fotocuadrantes).
+# La localidad viene de Resultados (sel_localidad).
 output$matriz_completitud_fc <- renderPlotly({
-  by_site <- !is.null(input$sel_loc_fc) && input$sel_loc_fc != "ALL"
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
 
   df_mat <- AMP_filtrado_fc() %>% filter(!is.na(year))
-  if (by_site) df_mat <- df_mat %>% filter(locality == input$sel_loc_fc)
+  if (by_site) df_mat <- df_mat %>% filter(locality == input$sel_localidad)
 
   df_mat <- df_mat %>%
     { if (by_site) group_by(., site, year) else group_by(., locality, year) } %>%
