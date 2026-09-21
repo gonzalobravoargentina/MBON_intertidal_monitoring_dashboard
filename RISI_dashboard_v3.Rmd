@@ -91,10 +91,30 @@ body, .tab-content { background-color: #f0f4f8 !important; }
     return null;
   }
 
-  // Leaflet recalcula el contenedor (medía 0×0 con la pestaña oculta)
+  var settleTimer  = {};   // un timer por mapa
+  var lastSize     = {};   // último tamaño conocido de cada contenedor
+  var yaEncuadrado = {};   // si el mapa ya recibió su fitBounds inicial
+  var usandoRO     = false;
+
+  // Recalcular el contenedor. SIN animación: invalidateSize(true) significa
+  // animate:true, y esa animación al cambiar de pestaña se ve como un salto
+  // o deslizamiento raro del mapa.
   function refreshMap(id) {
     var m = getLeafletMap(id);
-    if (m) { try { m.invalidateSize(true); } catch (err) {} }
+    if (m) {
+      try { m.invalidateSize({ animate: false, pan: false }); return true; }
+      catch (err) {}
+    }
+    return false;
+  }
+
+  // Si el binding no expuso getMap(), red de seguridad: Leaflet escucha el
+  // resize de window de fábrica (trackResize:true) y cada mapa visible se
+  // recalcula por su cuenta.
+  function refreshAll(ids) {
+    var fallo = false;
+    ids.forEach(function (id) { if (!refreshMap(id)) fallo = true; });
+    if (fallo) { try { window.dispatchEvent(new Event("resize")); } catch (e) {} }
   }
 
   // IDs de los mapas leaflet dentro de un panel
@@ -112,37 +132,79 @@ body, .tab-content { background-color: #f0f4f8 !important; }
   function activePane() { return ".tab-pane.active, .section.level1.active"; }
 
   // Un input POR MAPA: cada observer de R queda independiente del otro.
-  function syncMaps(ids) {
-    if (!ids || !ids.length) return;
-    ids.forEach(function (id) {
-      refreshMap(id);
-      if (window.Shiny) {
-        Shiny.setInputValue("shown_" + id, Date.now(), { priority: "event" });
-      }
-    });
+  function pedirEncuadre(id) {
+    if (window.Shiny) {
+      Shiny.setInputValue("shown_" + id, Date.now(), { priority: "event" });
+    }
   }
 
-  // Al mostrarse una pestaña con mapas
+  // Encuadrar SÓLO la primera vez que el mapa tiene tamaño real. Si no,
+  // cada ida y vuelta entre pestañas le pisaría al usuario el zoom que
+  // hizo a mano. Cambiar de localidad sí reencuadra (observer en R).
+  function encuadrarSiHaceFalta(id) {
+    if (yaEncuadrado[id]) return;
+    yaEncuadrado[id] = true;
+    pedirEncuadre(id);
+  }
+
+  // El contenedor de un mapa cambió de tamaño de verdad
+  function onResized(id, w, h) {
+    if (w < 1 || h < 1) return;                  // sigue oculto
+    var key = Math.round(w) + "x" + Math.round(h);
+    if (lastSize[id] === key) return;            // sin cambio real
+    lastSize[id] = key;
+
+    refreshMap(id);
+    clearTimeout(settleTimer[id]);
+    settleTimer[id] = setTimeout(function () {
+      refreshMap(id);
+      encuadrarSiHaceFalta(id);
+    }, 180);
+  }
+
+  // ResizeObserver: se dispara exactamente cuando el contenedor pasa de
+  // 0×0 (pestaña oculta) a su tamaño real. Es event-driven, así que no
+  // depende de adivinar un setTimeout que a veces llega antes de tiempo.
+  function observarMapas() {
+    if (!window.ResizeObserver) return false;
+    var ro = new ResizeObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.target.id) return;
+        onResized(en.target.id, en.contentRect.width, en.contentRect.height);
+      });
+    });
+    var n = 0;
+    $("div.leaflet").each(function () {
+      if (this.id) { ro.observe(this); n++; }
+    });
+    return n > 0;
+  }
+
+  // Al mostrarse una pestaña: recalcular el tamaño siempre (es idempotente
+  // y barato). El encuadre lo decide onResized vía ResizeObserver; sólo si
+  // no hay ResizeObserver lo pedimos acá.
   $(document).on("shown.bs.tab", function (e) {
     var href = $(e.target).attr("href");
     if (!href || href.charAt(0) !== "#") return;
     var ids = mapsInPane(href);
     if (!ids.length) return;
 
-    // 1) el contenedor ya es visible → Leaflet recalcula su tamaño
+    setTimeout(function () { refreshAll(ids); }, 120);
     setTimeout(function () {
-      ids.forEach(refreshMap);
-      window.dispatchEvent(new Event("resize"));
-    }, 120);
-
-    // 2) tamaño ya estable → recién ahí R reaplica el encuadre
-    setTimeout(function () { syncMaps(ids); }, 420);
+      refreshAll(ids);
+      if (!usandoRO) ids.forEach(encuadrarSiHaceFalta);
+    }, 450);
   });
 
   // Encuadre inicial: shown.bs.tab no dispara para la pestaña que ya
   // está activa al cargar la página.
   $(document).on("shiny:connected", function () {
-    setTimeout(function () { syncMaps(mapsInPane(activePane())); }, 700);
+    setTimeout(function () {
+      usandoRO = observarMapas();
+      var ids = mapsInPane(activePane());
+      refreshAll(ids);
+      ids.forEach(encuadrarSiHaceFalta);
+    }, 700);
   });
 
 })();
