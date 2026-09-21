@@ -649,10 +649,33 @@ zoom_mapa_fc <- function(loc_sel) {
 # setView y no fitBounds: al arrancar, esta pestaña está oculta y el
 # contenedor mide 0×0; un fitBounds ahí deja Leaflet en zoom ~0, que es
 # exactamente el "se ve el mundo entero" que veníamos arrastrando.
+# Filas dibujables (lat/lon válidos) o NULL
+datos_fc_validos <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(NULL)
+  if (!all(c("Latitude","Longitude","strata") %in% names(df))) return(NULL)
+  df <- df %>% filter(!is.na(Latitude), !is.na(Longitude))
+  if (nrow(df) == 0) return(NULL)
+  df
+}
+
+# Dibuja los fotocuadrantes. La MISMA función sirve para el render inicial
+# y para las actualizaciones por proxy, así no se duplica el estilo.
+dibujar_fc <- function(map, df) {
+  addCircleMarkers(map, data = df,
+    lng = ~as.numeric(Longitude), lat = ~as.numeric(Latitude),
+    radius = 4, weight = 0.7, fillOpacity = 0.85,
+    color     = ~strata_color_fn(strata),
+    fillColor = ~strata_color_fn(strata),
+    popup = ~paste0("<b>",locality,"</b><br>Sitio: ",site,
+                    "<br>Estrato: ",strata,"<br>Fecha: ",Date,
+                    "<br><span style='color:#888;font-size:11px;'>📷 ",Name,"</span>")
+  )
+}
+
 output$mapa_sitios <- renderLeaflet({
   df_all <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
 
-  leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
+  m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
                      options = providerTileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
     # OSM en lugar de CartoDB: gratuito, sin API key, y con upscaling
@@ -671,31 +694,27 @@ output$mapa_sitios <- renderLeaflet({
     setView(lng  = mean(as.numeric(df_all$Longitude), na.rm = TRUE),
             lat  = mean(as.numeric(df_all$Latitude),  na.rm = TRUE),
             zoom = 6)
+
+  # Marcadores iniciales DENTRO del render. leafletProxy sólo le llega a un
+  # mapa que ya existe en el cliente, y durante el primer flush de Shiny el
+  # mapa todavía se está creando: ese primer lote de puntos se descarta en
+  # silencio. isolate() lee el valor actual SIN crear dependencia reactiva,
+  # así el mapa se sigue construyendo una sola vez.
+  df0 <- datos_fc_validos(isolate(tryCatch(AMP_filtrado_fc(), error = function(e) NULL)))
+  if (!is.null(df0)) m <- dibujar_fc(m, df0)
+  m
 })
 # Sin suspensión: si Shiny suspende el output con la pestaña oculta y
 # después lo reanuda, renderLeaflet vuelve a correr y re-crea el mapa
 # desde cero, perdiendo marcadores y encuadre puestos por proxy.
 outputOptions(output, "mapa_sitios", suspendWhenHidden = FALSE)
 
-# Marcadores: se redibujan al cambiar los filtros SIN tocar la vista,
+# Actualizaciones: se redibujan al cambiar los filtros SIN tocar la vista,
 # así cambiar estrato o año no le resetea el zoom al usuario.
 observe({
-  df <- AMP_filtrado_fc()
-  req(nrow(df) > 0, all(c("Latitude","Longitude","strata") %in% names(df)))
-  df <- df %>% filter(!is.na(Latitude), !is.na(Longitude))
-  req(nrow(df) > 0)
-
-  leafletProxy("mapa_sitios", data = df) %>%
-    clearMarkers() %>%
-    addCircleMarkers(
-      lng = ~as.numeric(Longitude), lat = ~as.numeric(Latitude),
-      radius = 4, weight = 0.7, fillOpacity = 0.85,
-      color     = ~strata_color_fn(strata),
-      fillColor = ~strata_color_fn(strata),
-      popup = ~paste0("<b>",locality,"</b><br>Sitio: ",site,
-                      "<br>Estrato: ",strata,"<br>Fecha: ",Date,
-                      "<br><span style='color:#888;font-size:11px;'>📷 ",Name,"</span>")
-    )
+  df <- datos_fc_validos(AMP_filtrado_fc())
+  req(!is.null(df))
+  leafletProxy("mapa_sitios") %>% clearMarkers() %>% dibujar_fc(df)
 })
 
 # Zoom: SÓLO al cambiar la localidad de esta pestaña.
@@ -761,10 +780,36 @@ zoom_mapa_indice <- function(loc_sel) {
 # indice_resumen_mapa(): cada cambio de filtro re-creaba el mapa entero,
 # y si ocurría con la pestaña oculta el contenedor era 0×0 → al volver a
 # Resultados el mapa aparecía desfasado y en blanco.
+# Dibuja los puntos del índice. La MISMA función sirve para el render
+# inicial y para las actualizaciones por proxy.
+dibujar_indice <- function(map, pts, titulo_popup) {
+  pts <- pts %>% mutate(radius = rescale(RISI_mean, to = c(7,20), from = c(0,10)))
+  pal_class <- colorFactor(palette=unname(class_cols[RISI_levels]),domain=RISI_levels,ordered=TRUE)
+  addCircleMarkers(map, data = pts,
+    lng=~lon,lat=~lat,radius=~radius,weight=1,
+    color="white",fillColor=~pal_class(as.character(RISI_class)),fillOpacity=0.9,
+    label=~sigla,
+    labelOptions=labelOptions(
+      permanent=TRUE, noHide=TRUE, textOnly=TRUE, direction="center",
+      style=list(
+        "color"="#1b2a3b","font-weight"="bold","font-size"="10px",
+        "text-shadow"="1px 1px 0 white,-1px -1px 0 white,1px -1px 0 white,-1px 1px 0 white"
+      )
+    ),
+    popup=~paste0(
+      "<b>",titulo_popup,":</b> ",etiqueta,
+      if(titulo_popup=="Sitio") paste0("<br><i>",locality,"</i>") else "",
+      "<br><b>RISI:</b> ",round(RISI_mean,2),
+      "<br><b>Clase:</b> <strong>",as.character(RISI_class),"</strong>",
+      "<br><b>Fotos MIDTIDE:</b> ",n_fotos
+    )
+  )
+}
+
 output$mapa_indice <- renderLeaflet({
   df_all <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
 
-  leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
+  m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
                      options = providerTileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
     addTiles(group = "Mapa",
@@ -777,38 +822,27 @@ output$mapa_indice <- renderLeaflet({
     setView(lng  = mean(as.numeric(df_all$Longitude), na.rm = TRUE),
             lat  = mean(as.numeric(df_all$Latitude),  na.rm = TRUE),
             zoom = 6)
+
+  # Marcadores iniciales DENTRO del render (ver nota en el mapa de FC):
+  # el primer mensaje de leafletProxy se pierde porque el mapa todavía no
+  # existe en el cliente. isolate() evita reintroducir dependencias.
+  pts0 <- isolate(tryCatch(indice_resumen_mapa(), error = function(e) NULL))
+  if (!is.null(pts0) && nrow(pts0) > 0) {
+    lab0 <- isolate(
+      if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") "Sitio" else "Localidad"
+    )
+    m <- dibujar_indice(m, pts0, lab0)
+  }
+  m
 })
 outputOptions(output, "mapa_indice", suspendWhenHidden = FALSE)
 
-# Marcadores del índice: se redibujan con los filtros sin tocar la vista.
+# Actualizaciones: se redibujan con los filtros sin tocar la vista.
 # clearMarkers() no borra controles, así que la tarjeta RISI sobrevive.
 observe({
   pts <- indice_resumen_mapa(); req(nrow(pts) > 0)
-  pts <- pts %>% mutate(radius = rescale(RISI_mean, to = c(7,20), from = c(0,10)))
-  pal_class <- colorFactor(palette=unname(class_cols[RISI_levels]),domain=RISI_levels,ordered=TRUE)
   titulo_popup <- if(!is.null(input$sel_localidad)&&input$sel_localidad!="ALL") "Sitio" else "Localidad"
-
-  leafletProxy("mapa_indice", data = pts) %>%
-    clearMarkers() %>%
-    addCircleMarkers(
-      lng=~lon,lat=~lat,radius=~radius,weight=1,
-      color="white",fillColor=~pal_class(as.character(RISI_class)),fillOpacity=0.9,
-      label=~sigla,
-      labelOptions=labelOptions(
-        permanent=TRUE, noHide=TRUE, textOnly=TRUE, direction="center",
-        style=list(
-          "color"="#1b2a3b","font-weight"="bold","font-size"="10px",
-          "text-shadow"="1px 1px 0 white,-1px -1px 0 white,1px -1px 0 white,-1px 1px 0 white"
-        )
-      ),
-      popup=~paste0(
-        "<b>",titulo_popup,":</b> ",etiqueta,
-        if(titulo_popup=="Sitio") paste0("<br><i>",locality,"</i>") else "",
-        "<br><b>RISI:</b> ",round(RISI_mean,2),
-        "<br><b>Clase:</b> <strong>",as.character(RISI_class),"</strong>",
-        "<br><b>Fotos MIDTIDE:</b> ",n_fotos
-      )
-    )
+  leafletProxy("mapa_indice") %>% clearMarkers() %>% dibujar_indice(pts, titulo_popup)
 })
 
 # Zoom: SÓLO al cambiar la localidad de esta pestaña.
