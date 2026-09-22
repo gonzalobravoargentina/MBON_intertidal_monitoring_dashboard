@@ -375,6 +375,21 @@ bounds_localidad <- function(loc_sel) {
        lng2 = lng_r[2] + pad, lat2 = lat_r[2] + pad)
 }
 
+# ¿El centro guardado por el cliente cae en una zona razonable?
+# Una vista calculada con el contenedor oculto (0×0) puede devolver un zoom
+# plausible pero con el centro corrido mar adentro. Con holgura = 1 se
+# admite que el usuario haya paneado hasta el doble del área de interés;
+# más lejos que eso se considera basura y se reencuadra.
+centro_en_bounds <- function(ctr, b, holgura = 1) {
+  if (is.null(ctr) || is.null(b)) return(FALSE)
+  if (is.null(ctr$lng) || is.null(ctr$lat)) return(FALSE)
+  if (!is.finite(ctr$lng) || !is.finite(ctr$lat)) return(FALSE)
+  dx <- (b$lng2 - b$lng1) * holgura
+  dy <- (b$lat2 - b$lat1) * holgura
+  ctr$lng >= b$lng1 - dx && ctr$lng <= b$lng2 + dx &&
+  ctr$lat >= b$lat1 - dy && ctr$lat <= b$lat2 + dy
+}
+
 # HTML pill control rendered on top of the leaflet map
 risi_pills_html <- HTML(paste0(
   '<div style="background:rgba(255,255,255,0.95);padding:7px 11px;border-radius:7px;',
@@ -659,8 +674,9 @@ dibujar_fc <- function(map, df) {
   )
 }
 
-# Memoria de sesión (NO reactiva) de la última localidad dibujada
-loc_fc_prev <- NULL
+# Memoria de sesión (NO reactiva)
+loc_fc_prev    <- NULL    # última localidad dibujada
+fc_ya_mostrado <- FALSE   # si la pestaña ya se mostró alguna vez
 
 # ═══════════════════════════════════════════════════════════════════
 #  MAPA DE FOTOCUADRANTES — sin leafletProxy
@@ -672,17 +688,28 @@ loc_fc_prev <- NULL
 output$mapa_sitios <- renderLeaflet({
   df  <- datos_fc_validos(AMP_filtrado_fc())
   loc <- input$sel_loc_fc
-  input$shown_mapa_sitios      # redibujar cuando la pestaña se muestra
+  shown <- input$shown_mapa_sitios   # redibujar cuando la pestaña se muestra
 
   # Cambiar de localidad reencuadra; cualquier otro filtro conserva la vista
   cambio_loc  <- !identical(loc_fc_prev, loc)
   loc_fc_prev <<- loc
 
+  # Primera vez que esta pestaña se muestra: hasta acá el mapa venía
+  # dibujado con el contenedor en 0×0, así que su centro/zoom guardados no
+  # describen nada real. Hay que reencuadrar sí o sí.
+  primera_vez <- !is.null(shown) && !fc_ya_mostrado
+  if (!is.null(shown)) fc_ya_mostrado <<- TRUE
+
   ctr <- isolate(input$mapa_sitios_center)
   zm  <- isolate(input$mapa_sitios_zoom)
-  # Un zoom < 3 delata una vista calculada con el contenedor en 0×0
-  # (pestaña oculta): se descarta y se reencuadra.
-  vista_util <- !cambio_loc && !is.null(ctr) && !is.null(zm) && zm >= 3
+  b   <- bounds_localidad(loc)
+
+  # Sólo se conserva la vista del usuario si es creíble: zoom razonable Y
+  # centro en una zona plausible. Un zoom alto con el centro corrido mar
+  # adentro es justamente lo que dejaba el mapa "defasado".
+  vista_util <- !cambio_loc && !primera_vez &&
+                !is.null(ctr) && !is.null(zm) && zm >= 3 &&
+                centro_en_bounds(ctr, b)
 
   m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
@@ -705,9 +732,8 @@ output$mapa_sitios <- renderLeaflet({
 
   if (vista_util) {
     m <- m %>% setView(lng = ctr$lng, lat = ctr$lat, zoom = zm)
-  } else {
-    b <- bounds_localidad(loc)
-    if (!is.null(b)) m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
+  } else if (!is.null(b)) {
+    m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
   }
   m
 })
@@ -777,8 +803,9 @@ dibujar_indice <- function(map, pts, titulo_popup) {
   )
 }
 
-# Memoria de sesión (NO reactiva) de la última localidad dibujada
-loc_indice_prev <- NULL
+# Memoria de sesión (NO reactiva)
+loc_indice_prev    <- NULL    # última localidad dibujada
+indice_ya_mostrado <- FALSE   # si la pestaña ya se mostró alguna vez
 
 # ═══════════════════════════════════════════════════════════════════
 #  MAPA DE RESULTADOS — sin leafletProxy (ver nota en el mapa de FC)
@@ -786,14 +813,22 @@ loc_indice_prev <- NULL
 output$mapa_indice <- renderLeaflet({
   pts <- tryCatch(indice_resumen_mapa(), error = function(e) NULL)
   loc <- input$sel_localidad
-  input$shown_mapa_indice      # redibujar cuando la pestaña se muestra
+  shown <- input$shown_mapa_indice   # redibujar cuando la pestaña se muestra
 
   cambio_loc      <- !identical(loc_indice_prev, loc)
   loc_indice_prev <<- loc
 
+  # Ver nota en el mapa de Fotocuadrantes
+  primera_vez <- !is.null(shown) && !indice_ya_mostrado
+  if (!is.null(shown)) indice_ya_mostrado <<- TRUE
+
   ctr <- isolate(input$mapa_indice_center)
   zm  <- isolate(input$mapa_indice_zoom)
-  vista_util <- !cambio_loc && !is.null(ctr) && !is.null(zm) && zm >= 3
+  b   <- bounds_localidad(loc)
+
+  vista_util <- !cambio_loc && !primera_vez &&
+                !is.null(ctr) && !is.null(zm) && zm >= 3 &&
+                centro_en_bounds(ctr, b)
 
   m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
@@ -813,9 +848,8 @@ output$mapa_indice <- renderLeaflet({
 
   if (vista_util) {
     m <- m %>% setView(lng = ctr$lng, lat = ctr$lat, zoom = zm)
-  } else {
-    b <- bounds_localidad(loc)
-    if (!is.null(b)) m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
+  } else if (!is.null(b)) {
+    m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
   }
   m
 })
