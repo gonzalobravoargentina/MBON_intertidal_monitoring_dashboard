@@ -86,10 +86,12 @@ body, .tab-content { background-color: #f0f4f8 !important; }
 <script>
 (function () {
 
+  var ro = null;            // un único ResizeObserver para todos los mapas
+  var observados = {};      // ids ya registrados
+
   // Instancia Leaflet real de un output de R. El binding htmlwidgets del
-  // paquete leaflet expone getMap(). OJO: no existe ningún el._leaflet_map
-  // — buscar ahí devuelve undefined y el invalidateSize() nunca corre, que
-  // es la razón por la que los mapas quedaban desfasados al cambiar de tab.
+  // paquete leaflet expone getMap(). Si no estuviera disponible, se cae al
+  // evento resize de window, que Leaflet escucha de fábrica.
   function getLeafletMap(id) {
     try {
       if (window.HTMLWidgets) {
@@ -100,14 +102,8 @@ body, .tab-content { background-color: #f0f4f8 !important; }
     return null;
   }
 
-  var settleTimer  = {};   // un timer por mapa
-  var lastSize     = {};   // último tamaño conocido de cada contenedor
-  var yaEncuadrado = {};   // si el mapa ya recibió su fitBounds inicial
-  var usandoRO     = false;
-
-  // Recalcular el contenedor. SIN animación: invalidateSize(true) significa
-  // animate:true, y esa animación al cambiar de pestaña se ve como un salto
-  // o deslizamiento raro del mapa.
+  // Recalcular el contenedor. SIN animación: animate:true produce un salto
+  // visible al volver a la pestaña.
   function refreshMap(id) {
     var m = getLeafletMap(id);
     if (m) {
@@ -117,16 +113,12 @@ body, .tab-content { background-color: #f0f4f8 !important; }
     return false;
   }
 
-  // Si el binding no expuso getMap(), red de seguridad: Leaflet escucha el
-  // resize de window de fábrica (trackResize:true) y cada mapa visible se
-  // recalcula por su cuenta.
   function refreshAll(ids) {
     var fallo = false;
     ids.forEach(function (id) { if (!refreshMap(id)) fallo = true; });
     if (fallo) { try { window.dispatchEvent(new Event("resize")); } catch (e) {} }
   }
 
-  // IDs de los mapas leaflet dentro de un panel
   function mapsInPane(sel) {
     var ids = [];
     try {
@@ -140,80 +132,53 @@ body, .tab-content { background-color: #f0f4f8 !important; }
 
   function activePane() { return ".tab-pane.active, .section.level1.active"; }
 
-  // Un input POR MAPA: cada observer de R queda independiente del otro.
-  function pedirEncuadre(id) {
-    if (window.Shiny) {
-      Shiny.setInputValue("shown_" + id, Date.now(), { priority: "event" });
-    }
-  }
-
-  // Encuadrar SÓLO la primera vez que el mapa tiene tamaño real. Si no,
-  // cada ida y vuelta entre pestañas le pisaría al usuario el zoom que
-  // hizo a mano. Cambiar de localidad sí reencuadra (observer en R).
-  function encuadrarSiHaceFalta(id) {
-    if (yaEncuadrado[id]) return;
-    yaEncuadrado[id] = true;
-    pedirEncuadre(id);
-  }
-
-  // El contenedor de un mapa cambió de tamaño de verdad
-  function onResized(id, w, h) {
-    if (w < 1 || h < 1) return;                  // sigue oculto
-    var key = Math.round(w) + "x" + Math.round(h);
-    if (lastSize[id] === key) return;            // sin cambio real
-    lastSize[id] = key;
-
-    refreshMap(id);
-    clearTimeout(settleTimer[id]);
-    settleTimer[id] = setTimeout(function () {
-      refreshMap(id);
-      encuadrarSiHaceFalta(id);
-    }, 180);
-  }
-
-  // ResizeObserver: se dispara exactamente cuando el contenedor pasa de
-  // 0×0 (pestaña oculta) a su tamaño real. Es event-driven, así que no
-  // depende de adivinar un setTimeout que a veces llega antes de tiempo.
+  // ResizeObserver: avisa cuando el contenedor recupera tamaño real al
+  // mostrarse la pestaña. Su ÚNICA tarea es el invalidateSize; no le pide
+  // nada a R, así ir y volver entre pestañas no redibuja el mapa.
   function observarMapas() {
-    if (!window.ResizeObserver) return false;
-    var ro = new ResizeObserver(function (entries) {
-      entries.forEach(function (en) {
-        if (!en.target.id) return;
-        onResized(en.target.id, en.contentRect.width, en.contentRect.height);
+    if (!window.ResizeObserver) return 0;
+    if (!ro) {
+      ro = new ResizeObserver(function (entries) {
+        entries.forEach(function (en) {
+          var id = en.target.id; if (!id) return;
+          var r = en.contentRect;
+          if (r.width < 1 || r.height < 1) return;   // oculto: nada que hacer
+          refreshMap(id);
+        });
       });
-    });
+    }
     var n = 0;
     $("div.leaflet").each(function () {
-      if (this.id) { ro.observe(this); n++; }
+      if (this.id && !observados[this.id]) {
+        ro.observe(this); observados[this.id] = true; n++;
+      }
     });
-    return n > 0;
+    return n;
   }
 
-  // Al mostrarse una pestaña: recalcular el tamaño siempre (es idempotente
-  // y barato). El encuadre lo decide onResized vía ResizeObserver; sólo si
-  // no hay ResizeObserver lo pedimos acá.
+  // Respaldo por si no hay ResizeObserver
   $(document).on("shown.bs.tab", function (e) {
     var href = $(e.target).attr("href");
     if (!href || href.charAt(0) !== "#") return;
     var ids = mapsInPane(href);
     if (!ids.length) return;
-
     setTimeout(function () { refreshAll(ids); }, 120);
-    setTimeout(function () {
-      refreshAll(ids);
-      if (!usandoRO) ids.forEach(encuadrarSiHaceFalta);
-    }, 450);
+    setTimeout(function () { refreshAll(ids); }, 450);
   });
 
-  // Encuadre inicial: shown.bs.tab no dispara para la pestaña que ya
-  // está activa al cargar la página.
   $(document).on("shiny:connected", function () {
     setTimeout(function () {
-      usandoRO = observarMapas();
-      var ids = mapsInPane(activePane());
-      refreshAll(ids);
-      ids.forEach(encuadrarSiHaceFalta);
+      observarMapas();
+      refreshAll(mapsInPane(activePane()));
     }, 700);
+  });
+
+  // Un mapa de una pestaña todavía no visitada no existe al conectar:
+  // registrarlo en el observer cuando Shiny lo dibuje por primera vez.
+  $(document).on("shiny:value", function (e) {
+    if (e.name === "mapa_sitios" || e.name === "mapa_indice") {
+      setTimeout(observarMapas, 300);
+    }
   });
 
 })();
@@ -688,9 +653,8 @@ dibujar_fc <- function(map, df) {
   )
 }
 
-# Memoria de sesión (NO reactiva)
-loc_fc_prev    <- NULL    # última localidad dibujada
-fc_ya_mostrado <- FALSE   # si la pestaña ya se mostró alguna vez
+# Memoria de sesión (NO reactiva) de la última localidad dibujada
+loc_fc_prev <- NULL
 
 # ═══════════════════════════════════════════════════════════════════
 #  MAPA DE FOTOCUADRANTES — sin leafletProxy
@@ -702,26 +666,22 @@ fc_ya_mostrado <- FALSE   # si la pestaña ya se mostró alguna vez
 output$mapa_sitios <- renderLeaflet({
   df  <- datos_fc_validos(AMP_filtrado_fc())
   loc <- input$sel_loc_fc
-  shown <- input$shown_mapa_sitios   # redibujar cuando la pestaña se muestra
+
+  # NO depende de la pestaña: cambiar de pestaña no debe redibujar nada.
+  # Con el output suspendido mientras está oculta, este render sólo corre
+  # con la pestaña visible, así que el contenedor siempre tiene tamaño real.
 
   # Cambiar de localidad reencuadra; cualquier otro filtro conserva la vista
   cambio_loc  <- !identical(loc_fc_prev, loc)
   loc_fc_prev <<- loc
-
-  # Primera vez que esta pestaña se muestra: hasta acá el mapa venía
-  # dibujado con el contenedor en 0×0, así que su centro/zoom guardados no
-  # describen nada real. Hay que reencuadrar sí o sí.
-  primera_vez <- !is.null(shown) && !fc_ya_mostrado
-  if (!is.null(shown)) fc_ya_mostrado <<- TRUE
 
   ctr <- isolate(input$mapa_sitios_center)
   zm  <- isolate(input$mapa_sitios_zoom)
   b   <- bounds_localidad(loc)
 
   # Sólo se conserva la vista del usuario si es creíble: zoom razonable Y
-  # centro en una zona plausible. Un zoom alto con el centro corrido mar
-  # adentro es justamente lo que dejaba el mapa "defasado".
-  vista_util <- !cambio_loc && !primera_vez &&
+  # centro en una zona plausible.
+  vista_util <- !cambio_loc &&
                 !is.null(ctr) && !is.null(zm) && zm >= 3 &&
                 centro_en_bounds(ctr, b)
 
@@ -751,7 +711,11 @@ output$mapa_sitios <- renderLeaflet({
   }
   m
 })
-outputOptions(output, "mapa_sitios", suspendWhenHidden = FALSE)
+# Se deja el suspendWhenHidden por defecto (TRUE): con la pestaña oculta el
+# output se suspende y el mapa NO se construye. Así nunca se dibuja contra
+# un contenedor de 0×0, que era el origen de las vistas rotas. Al volver a
+# la pestaña, si ningún filtro cambió, Shiny no re-renderiza: el mapa queda
+# tal cual lo dejaste y al JS sólo le toca el invalidateSize.
 ```
 
 # Resultados
@@ -817,9 +781,8 @@ dibujar_indice <- function(map, pts, titulo_popup) {
   )
 }
 
-# Memoria de sesión (NO reactiva)
-loc_indice_prev    <- NULL    # última localidad dibujada
-indice_ya_mostrado <- FALSE   # si la pestaña ya se mostró alguna vez
+# Memoria de sesión (NO reactiva) de la última localidad dibujada
+loc_indice_prev <- NULL
 
 # ═══════════════════════════════════════════════════════════════════
 #  MAPA DE RESULTADOS — sin leafletProxy (ver nota en el mapa de FC)
@@ -827,20 +790,16 @@ indice_ya_mostrado <- FALSE   # si la pestaña ya se mostró alguna vez
 output$mapa_indice <- renderLeaflet({
   pts <- tryCatch(indice_resumen_mapa(), error = function(e) NULL)
   loc <- input$sel_localidad
-  shown <- input$shown_mapa_indice   # redibujar cuando la pestaña se muestra
 
+  # No depende de la pestaña (ver nota en el mapa de Fotocuadrantes)
   cambio_loc      <- !identical(loc_indice_prev, loc)
   loc_indice_prev <<- loc
-
-  # Ver nota en el mapa de Fotocuadrantes
-  primera_vez <- !is.null(shown) && !indice_ya_mostrado
-  if (!is.null(shown)) indice_ya_mostrado <<- TRUE
 
   ctr <- isolate(input$mapa_indice_center)
   zm  <- isolate(input$mapa_indice_zoom)
   b   <- bounds_localidad(loc)
 
-  vista_util <- !cambio_loc && !primera_vez &&
+  vista_util <- !cambio_loc &&
                 !is.null(ctr) && !is.null(zm) && zm >= 3 &&
                 centro_en_bounds(ctr, b)
 
@@ -867,7 +826,7 @@ output$mapa_indice <- renderLeaflet({
   }
   m
 })
-outputOptions(output, "mapa_indice", suspendWhenHidden = FALSE)
+# suspendWhenHidden por defecto (ver nota en el mapa de Fotocuadrantes)
 ```
 
 ## Column {data-width=540 .scrollable}
