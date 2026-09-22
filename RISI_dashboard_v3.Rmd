@@ -637,18 +637,6 @@ output$fotocuadrante_img <- renderImage(
 strata_colors   <- c("HIGHTIDE"="#e74c3c", "MIDTIDE"="#3498db", "LOWTIDE"="#2ecc71")
 strata_color_fn <- function(s) unname(strata_colors[as.character(s)])
 
-# Encuadra ESTE mapa. Nunca toca mapa_indice.
-zoom_mapa_fc <- function(loc_sel) {
-  b <- bounds_localidad(loc_sel)
-  if (is.null(b)) return(invisible(NULL))
-  leafletProxy("mapa_sitios") %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
-  invisible(NULL)
-}
-
-# Mapa base: se dibuja UNA sola vez, sin dependencias reactivas.
-# setView y no fitBounds: al arrancar, esta pestaña está oculta y el
-# contenedor mide 0×0; un fitBounds ahí deja Leaflet en zoom ~0, que es
-# exactamente el "se ve el mundo entero" que veníamos arrastrando.
 # Filas dibujables (lat/lon válidos) o NULL
 datos_fc_validos <- function(df) {
   if (is.null(df) || nrow(df) == 0) return(NULL)
@@ -658,8 +646,7 @@ datos_fc_validos <- function(df) {
   df
 }
 
-# Dibuja los fotocuadrantes. La MISMA función sirve para el render inicial
-# y para las actualizaciones por proxy, así no se duplica el estilo.
+# Dibuja los fotocuadrantes sobre el mapa
 dibujar_fc <- function(map, df) {
   addCircleMarkers(map, data = df,
     lng = ~as.numeric(Longitude), lat = ~as.numeric(Latitude),
@@ -668,12 +655,34 @@ dibujar_fc <- function(map, df) {
     fillColor = ~strata_color_fn(strata),
     popup = ~paste0("<b>",locality,"</b><br>Sitio: ",site,
                     "<br>Estrato: ",strata,"<br>Fecha: ",Date,
-                    "<br><span style='color:#888;font-size:11px;'>📷 ",Name,"</span>")
+                    "<br><span style='color:#888;font-size:11px;'>&#128247; ",Name,"</span>")
   )
 }
 
+# Memoria de sesión (NO reactiva) de la última localidad dibujada
+loc_fc_prev <- NULL
+
+# ═══════════════════════════════════════════════════════════════════
+#  MAPA DE FOTOCUADRANTES — sin leafletProxy
+#  Los mensajes de leafletProxy no llegaban a aplicarse en esta app: ni
+#  los marcadores ni el encuadre. Lo que SÍ funciona siempre es lo que se
+#  dibuja dentro del render. Así que el mapa se redibuja entero y el zoom
+#  del usuario se conserva leyendo centro/zoom actuales del cliente.
+# ═══════════════════════════════════════════════════════════════════
 output$mapa_sitios <- renderLeaflet({
-  df_all <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
+  df  <- datos_fc_validos(AMP_filtrado_fc())
+  loc <- input$sel_loc_fc
+  input$shown_mapa_sitios      # redibujar cuando la pestaña se muestra
+
+  # Cambiar de localidad reencuadra; cualquier otro filtro conserva la vista
+  cambio_loc  <- !identical(loc_fc_prev, loc)
+  loc_fc_prev <<- loc
+
+  ctr <- isolate(input$mapa_sitios_center)
+  zm  <- isolate(input$mapa_sitios_zoom)
+  # Un zoom < 3 delata una vista calculada con el contenedor en 0×0
+  # (pestaña oculta): se descarta y se reencuadra.
+  vista_util <- !cambio_loc && !is.null(ctr) && !is.null(zm) && zm >= 3
 
   m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
@@ -690,44 +699,19 @@ output$mapa_sitios <- renderLeaflet({
               title = "Estrato", opacity = 0.9) %>%
     addScaleBar("topleft", options = scaleBarOptions(imperial = FALSE, maxWidth = 100)) %>%
     addLayersControl(baseGroups = c("Satélite","Mapa"),
-                     options = layersControlOptions(collapsed = TRUE)) %>%
-    setView(lng  = mean(as.numeric(df_all$Longitude), na.rm = TRUE),
-            lat  = mean(as.numeric(df_all$Latitude),  na.rm = TRUE),
-            zoom = 6)
+                     options = layersControlOptions(collapsed = TRUE))
 
-  # Marcadores iniciales DENTRO del render. leafletProxy sólo le llega a un
-  # mapa que ya existe en el cliente, y durante el primer flush de Shiny el
-  # mapa todavía se está creando: ese primer lote de puntos se descarta en
-  # silencio. isolate() lee el valor actual SIN crear dependencia reactiva,
-  # así el mapa se sigue construyendo una sola vez.
-  df0 <- datos_fc_validos(isolate(tryCatch(AMP_filtrado_fc(), error = function(e) NULL)))
-  if (!is.null(df0)) m <- dibujar_fc(m, df0)
+  if (!is.null(df)) m <- dibujar_fc(m, df)
+
+  if (vista_util) {
+    m <- m %>% setView(lng = ctr$lng, lat = ctr$lat, zoom = zm)
+  } else {
+    b <- bounds_localidad(loc)
+    if (!is.null(b)) m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
+  }
   m
 })
-# Sin suspensión: si Shiny suspende el output con la pestaña oculta y
-# después lo reanuda, renderLeaflet vuelve a correr y re-crea el mapa
-# desde cero, perdiendo marcadores y encuadre puestos por proxy.
 outputOptions(output, "mapa_sitios", suspendWhenHidden = FALSE)
-
-# Actualizaciones: se redibujan al cambiar los filtros SIN tocar la vista,
-# así cambiar estrato o año no le resetea el zoom al usuario.
-observe({
-  df <- datos_fc_validos(AMP_filtrado_fc())
-  req(!is.null(df))
-  leafletProxy("mapa_sitios") %>% clearMarkers() %>% dibujar_fc(df)
-})
-
-# Zoom: SÓLO al cambiar la localidad de esta pestaña.
-observeEvent(input$sel_loc_fc, {
-  zoom_mapa_fc(input$sel_loc_fc)
-}, ignoreInit = TRUE)
-
-# Al mostrarse la pestaña, el JS ya corrió invalidateSize() sobre este
-# mapa; recién entonces el contenedor tiene tamaño real y fitBounds sirve.
-observeEvent(input$shown_mapa_sitios, {
-  # bounds_localidad() ya trata NULL como "todas las localidades"
-  zoom_mapa_fc(input$sel_loc_fc)
-}, ignoreInit = TRUE)
 ```
 
 # Resultados
@@ -768,20 +752,7 @@ leafletOutput("mapa_indice", height="100%", width="100%")
 #  ni estado con mapa_sitios.
 # ═══════════════════════════════════════════════════════════════════
 
-# Encuadra ESTE mapa. Nunca toca mapa_sitios.
-zoom_mapa_indice <- function(loc_sel) {
-  b <- bounds_localidad(loc_sel)
-  if (is.null(b)) return(invisible(NULL))
-  leafletProxy("mapa_indice") %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
-  invisible(NULL)
-}
-
-# Mapa base dibujado UNA sola vez. Antes este renderLeaflet dependía de
-# indice_resumen_mapa(): cada cambio de filtro re-creaba el mapa entero,
-# y si ocurría con la pestaña oculta el contenedor era 0×0 → al volver a
-# Resultados el mapa aparecía desfasado y en blanco.
-# Dibuja los puntos del índice. La MISMA función sirve para el render
-# inicial y para las actualizaciones por proxy.
+# Dibuja los puntos del índice sobre el mapa
 dibujar_indice <- function(map, pts, titulo_popup) {
   pts <- pts %>% mutate(radius = rescale(RISI_mean, to = c(7,20), from = c(0,10)))
   pal_class <- colorFactor(palette=unname(class_cols[RISI_levels]),domain=RISI_levels,ordered=TRUE)
@@ -806,8 +777,23 @@ dibujar_indice <- function(map, pts, titulo_popup) {
   )
 }
 
+# Memoria de sesión (NO reactiva) de la última localidad dibujada
+loc_indice_prev <- NULL
+
+# ═══════════════════════════════════════════════════════════════════
+#  MAPA DE RESULTADOS — sin leafletProxy (ver nota en el mapa de FC)
+# ═══════════════════════════════════════════════════════════════════
 output$mapa_indice <- renderLeaflet({
-  df_all <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
+  pts <- tryCatch(indice_resumen_mapa(), error = function(e) NULL)
+  loc <- input$sel_localidad
+  input$shown_mapa_indice      # redibujar cuando la pestaña se muestra
+
+  cambio_loc      <- !identical(loc_indice_prev, loc)
+  loc_indice_prev <<- loc
+
+  ctr <- isolate(input$mapa_indice_center)
+  zm  <- isolate(input$mapa_indice_zoom)
+  vista_util <- !cambio_loc && !is.null(ctr) && !is.null(zm) && zm >= 3
 
   m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
@@ -818,43 +804,22 @@ output$mapa_indice <- renderLeaflet({
     addControl(html = risi_pills_html, position = "topright") %>%
     addScaleBar("bottomleft", options = scaleBarOptions(imperial = FALSE, maxWidth = 100)) %>%
     addLayersControl(baseGroups = c("Satélite","Mapa"),
-                     options = layersControlOptions(collapsed = TRUE)) %>%
-    setView(lng  = mean(as.numeric(df_all$Longitude), na.rm = TRUE),
-            lat  = mean(as.numeric(df_all$Latitude),  na.rm = TRUE),
-            zoom = 6)
+                     options = layersControlOptions(collapsed = TRUE))
 
-  # Marcadores iniciales DENTRO del render (ver nota en el mapa de FC):
-  # el primer mensaje de leafletProxy se pierde porque el mapa todavía no
-  # existe en el cliente. isolate() evita reintroducir dependencias.
-  pts0 <- isolate(tryCatch(indice_resumen_mapa(), error = function(e) NULL))
-  if (!is.null(pts0) && nrow(pts0) > 0) {
-    lab0 <- isolate(
-      if (!is.null(input$sel_localidad) && input$sel_localidad != "ALL") "Sitio" else "Localidad"
-    )
-    m <- dibujar_indice(m, pts0, lab0)
+  if (!is.null(pts) && nrow(pts) > 0) {
+    lab <- if (!is.null(loc) && loc != "ALL") "Sitio" else "Localidad"
+    m <- dibujar_indice(m, pts, lab)
+  }
+
+  if (vista_util) {
+    m <- m %>% setView(lng = ctr$lng, lat = ctr$lat, zoom = zm)
+  } else {
+    b <- bounds_localidad(loc)
+    if (!is.null(b)) m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
   }
   m
 })
 outputOptions(output, "mapa_indice", suspendWhenHidden = FALSE)
-
-# Actualizaciones: se redibujan con los filtros sin tocar la vista.
-# clearMarkers() no borra controles, así que la tarjeta RISI sobrevive.
-observe({
-  pts <- indice_resumen_mapa(); req(nrow(pts) > 0)
-  titulo_popup <- if(!is.null(input$sel_localidad)&&input$sel_localidad!="ALL") "Sitio" else "Localidad"
-  leafletProxy("mapa_indice") %>% clearMarkers() %>% dibujar_indice(pts, titulo_popup)
-})
-
-# Zoom: SÓLO al cambiar la localidad de esta pestaña.
-observeEvent(input$sel_localidad, {
-  zoom_mapa_indice(input$sel_localidad)
-}, ignoreInit = TRUE)
-
-# Al mostrarse la pestaña, después del invalidateSize() del JS.
-observeEvent(input$shown_mapa_indice, {
-  # bounds_localidad() ya trata NULL como "todas las localidades"
-  zoom_mapa_indice(input$sel_localidad)
-}, ignoreInit = TRUE)
 ```
 
 ## Column {data-width=540 .scrollable}
