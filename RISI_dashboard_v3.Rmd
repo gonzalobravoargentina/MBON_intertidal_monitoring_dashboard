@@ -102,12 +102,18 @@ body, .tab-content { background-color: #f0f4f8 !important; }
     return null;
   }
 
-  // Recalcular el contenedor. SIN animación: animate:true produce un salto
-  // visible al volver a la pestaña.
+  // Recalcular el contenedor.
+  //  - animate:false  → sin animación, evita el salto visible al volver.
+  //  - pan: NO tocarlo. Su default es true y es lo que hace que Leaflet
+  //    panee para CONSERVAR EL CENTRO cuando cambia el tamaño. Ponerlo en
+  //    false deja fija la esquina superior izquierda y corre el centro:
+  //    era la causa de que la vista quedara desplazada al cambiar de
+  //    pestaña, y se notaba mucho más en el mapa de Fotocuadrantes porque
+  //    su contenedor pasa de 0×0 al tamaño real de golpe.
   function refreshMap(id) {
     var m = getLeafletMap(id);
     if (m) {
-      try { m.invalidateSize({ animate: false, pan: false }); return true; }
+      try { m.invalidateSize({ animate: false }); return true; }
       catch (err) {}
     }
     return false;
