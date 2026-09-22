@@ -181,6 +181,31 @@ body, .tab-content { background-color: #f0f4f8 !important; }
     }
   });
 
+  // ── DIAGNÓSTICO TEMPORAL ────────────────────────────────────────────
+  // Escribe en el panel de debug el tamaño real del contenedor y el zoom
+  // que Leaflet tiene en ese momento. Si el contenedor mide 0×0 o algo
+  // distinto del panel visible, el problema es de tamaño y no de R.
+  setInterval(function () {
+    $(".dbg-size").each(function () {
+      var id = $(this).attr("data-map");
+      var el = document.getElementById(id);
+      if (!el) { $(this).text("sin elemento"); return; }
+      var txt = Math.round(el.clientWidth) + "×" + Math.round(el.clientHeight);
+      var m = getLeafletMap(id);
+      if (m) {
+        try {
+          var s = m.getSize(), z = m.getZoom(), c = m.getCenter();
+          txt += " · leaflet " + Math.round(s.x) + "×" + Math.round(s.y) +
+                 "<br>zoom actual: " + (Math.round(z * 100) / 100) +
+                 "<br>centro actual: " + c.lng.toFixed(3) + ", " + c.lat.toFixed(3);
+        } catch (err) {}
+      } else {
+        txt += " · getMap() NO disponible";
+      }
+      $(this).html(txt);
+    });
+  }, 700);
+
 })();
 </script>
 
@@ -362,6 +387,38 @@ centro_en_bounds <- function(ctr, b, holgura = 1) {
   dy <- (b$lat2 - b$lat1) * holgura
   ctr$lng >= b$lng1 - dx && ctr$lng <= b$lng2 + dx &&
   ctr$lat >= b$lat1 - dy && ctr$lat <= b$lat2 + dy
+}
+
+# ═══════════════════════════════════════════════════════════════════
+#  DIAGNÓSTICO TEMPORAL — poner en FALSE para ocultar el panel
+#  El contador de renders discrimina entre las dos causas posibles de
+#  "la vista queda corrida": si al cambiar de pestaña el número SUBE, hay
+#  un re-render (dependencia reactiva); si NO sube y la vista igual está
+#  mal, el problema es el tamaño del contenedor en el cliente.
+# ═══════════════════════════════════════════════════════════════════
+DEBUG_MAPAS <- TRUE
+
+n_render_fc  <- 0
+n_render_idx <- 0
+
+panel_debug <- function(map, map_id, n, modo, loc, zm, ctr) {
+  if (!DEBUG_MAPAS) return(map)
+  fmt_ctr <- if (is.null(ctr) || is.null(ctr$lng)) "NULL"
+             else paste0(round(ctr$lng, 3), ", ", round(ctr$lat, 3))
+  html <- paste0(
+    '<div style="background:rgba(16,26,40,.9);color:#8fe3a8;',
+    'font:11px/1.5 ui-monospace,Menlo,monospace;padding:6px 9px;',
+    'border-radius:5px;border:1px solid #2f4a63;">',
+    '<b style="color:#ffd479;">DEBUG ', map_id, '</b><br>',
+    'render #', n, '<br>',
+    'vista: ', modo, '<br>',
+    'loc: ', if (is.null(loc)) "NULL" else loc, '<br>',
+    'zoom prev: ', if (is.null(zm)) "NULL" else round(zm, 2), '<br>',
+    'centro prev: ', fmt_ctr, '<br>',
+    'contenedor: <span class="dbg-size" data-map="', map_id, '">?</span>',
+    '</div>'
+  )
+  addControl(map, html = HTML(html), position = "bottomright")
 }
 
 # HTML pill control rendered on top of the leaflet map
@@ -709,6 +766,11 @@ output$mapa_sitios <- renderLeaflet({
   } else if (!is.null(b)) {
     m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
   }
+
+  n_render_fc <<- n_render_fc + 1
+  m <- panel_debug(m, "mapa_sitios", n_render_fc,
+                   if (vista_util) "restaurada" else "fitBounds",
+                   loc, zm, ctr)
   m
 })
 # Se deja el suspendWhenHidden por defecto (TRUE): con la pestaña oculta el
@@ -824,6 +886,11 @@ output$mapa_indice <- renderLeaflet({
   } else if (!is.null(b)) {
     m <- m %>% fitBounds(b$lng1, b$lat1, b$lng2, b$lat2)
   }
+
+  n_render_idx <<- n_render_idx + 1
+  m <- panel_debug(m, "mapa_indice", n_render_idx,
+                   if (vista_util) "restaurada" else "fitBounds",
+                   loc, zm, ctr)
   m
 })
 # suspendWhenHidden por defecto (ver nota en el mapa de Fotocuadrantes)
