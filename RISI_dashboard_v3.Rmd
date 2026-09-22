@@ -51,6 +51,14 @@ select option { background-color: #1b2a3b; }
 .kpi-label { font-size: 10px; color: #5d7a96; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
 .kpi-value { font-size: 13px; color: #ecf0f1; font-weight: 700; }
 
+/* ── Descripción de la pestaña, arriba de los filtros ── */
+.sidebar-desc {
+  font-size: 11.5px; color: #8fa8c0; line-height: 1.55;
+  margin: 0 0 14px 0; padding-bottom: 13px;
+  border-bottom: 1px solid #2a3f56;
+}
+.sidebar-desc strong { color: #cfe0ee; font-weight: 600; }
+
 /* ── Right scrollable panel ── */
 .scroll-content { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 .chart-block { background: white; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.07); padding: 12px 14px 10px 14px; }
@@ -746,21 +754,18 @@ outputOptions(output, "mapa_sitios", suspendWhenHidden = FALSE)
 
 ```{r sidebar_ui}
 tags$div(class="sidebar-inner",
+  tags$p(class="sidebar-desc", HTML(
+    "<strong>Estado ecológico</strong> del intermareal medio (MIDTIDE) según el
+     índice RISI. El mapa resume el RISI por localidad y los gráficos desglosan
+     la cobertura bentónica, los grupos funcionales y las tendencias por año.
+     Elegí una localidad para abrir el detalle sitio por sitio."
+  )),
   tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
   selectInput("sel_localidad","Parque / Localidad",choices=c("Todos"="ALL",localidades),selected="ALL"),
   selectInput("sel_year","Año",choices=c("Todos"="ALL",anios),selected="ALL"),
   selectInput("sel_estacion","Estación",choices=c("Todas"="ALL","Cálida"="Cálida","Fría"="Fría"),selected="ALL"),
   downloadButton("download_csv",label="⬇ Descargar datos CSV")
 )
-renderUI({
-  r <- resumen_muestreo()
-  tags$div(class="kpi-strip",
-    tags$div(class="kpi-item",tags$span(class="kpi-label","Fotocuadrantes"),tags$span(class="kpi-value",format(r$n_fotos,big.mark="."))),
-    tags$div(class="kpi-item",tags$span(class="kpi-label","Área equiv."),tags$span(class="kpi-value",paste0(r$area_m2," m²"))),
-    tags$div(class="kpi-item",tags$span(class="kpi-label","Días de campo"),tags$span(class="kpi-value",r$n_dias)),
-    tags$div(class="kpi-item",tags$span(class="kpi-label","Localidades / Sitios"),tags$span(class="kpi-value",paste0(r$n_localidades," / ",r$n_sitios)))
-  )
-})
 ```
 
 ## Column {data-width=460}
@@ -1270,6 +1275,12 @@ output$area_catami <- renderPlotly({
 
 ```{r sidebar_fc}
 tags$div(class="sidebar-inner",
+  tags$p(class="sidebar-desc", HTML(
+    "<strong>Cobertura del muestreo</strong>: dónde, cuándo y cuántas fotos se
+     tomaron. El mapa ubica cada fotocuadrante según su estrato mareal y la
+     matriz muestra qué combinaciones de sitio y año quedaron sin muestrear.
+     Elegí una localidad para ver sus fotos en CoralNet."
+  )),
   tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
   # Localidad propia: esta pestaña filtra y encuadra por su cuenta,
   # sin depender de lo que se elija en Resultados.
@@ -1347,16 +1358,16 @@ tags$div(class="scroll-content",
     )
   ),
 
-  # ── Esfuerzo ────────────────────────────────────────────────
-  tags$div(class="chart-block",
-    tags$p(class="section-title", "Esfuerzo por año y estación"),
-    plotlyOutput("plot_esfuerzo_fc", height="300px")
-  ),
-
   # ── Fotocuadrantes por muestreo ─────────────────────────────
   tags$div(class="chart-block",
     tags$p(class="section-title", "Fotocuadrantes por muestreo"),
     plotlyOutput("matriz_completitud_fc", height="320px")
+  ),
+
+  # ── Esfuerzo ────────────────────────────────────────────────
+  tags$div(class="chart-block",
+    tags$p(class="section-title", "Esfuerzo por año y estación"),
+    plotlyOutput("plot_esfuerzo_fc", height="300px")
   )
 )
 ```
