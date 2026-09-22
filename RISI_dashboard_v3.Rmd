@@ -57,7 +57,8 @@ select option { background-color: #1b2a3b; }
   margin: 0 0 14px 0; padding-bottom: 13px;
   border-bottom: 1px solid #2a3f56;
 }
-.sidebar-desc strong { color: #cfe0ee; font-weight: 600; }
+.sidebar-desc p { margin: 0; }
+.sidebar-desc-link { font-size: 11px; color: #6b8ca8; text-decoration: underline; }
 
 /* ── Right scrollable panel ── */
 .scroll-content { padding: 12px; display: flex; flex-direction: column; gap: 14px; }
@@ -540,7 +541,9 @@ observeEvent(input$show_catami_modal, {
   ))
 })
 
-observeEvent(input$show_risi_modal, {
+# Definición única del modal: se abre desde el panel de Resultados y desde
+# el enlace "+ info sobre RISI" del sidebar.
+mostrar_modal_risi <- function() {
   showModal(modalDialog(
     title = "Índice RISI — Rocky Intertidal Status Index",
     easyClose = TRUE, size = "l",
@@ -627,7 +630,10 @@ RISI = (25·S_BIO + 20·S_DIST) / 180 × 10
 </div>
     ')
   ))
-})
+}
+
+observeEvent(input$show_risi_modal,      { mostrar_modal_risi() })
+observeEvent(input$show_risi_modal_side, { mostrar_modal_risi() })
 
 # ── Fotocuadrantes: filtros 100% propios de la pestaña ───────
 # Ninguno depende de Resultados: las dos pestañas son independientes.
@@ -754,12 +760,15 @@ outputOptions(output, "mapa_sitios", suspendWhenHidden = FALSE)
 
 ```{r sidebar_ui}
 tags$div(class="sidebar-inner",
-  tags$p(class="sidebar-desc", HTML(
-    "<strong>Estado ecológico</strong> del intermareal medio (MIDTIDE) según el
-     índice RISI. El mapa resume el RISI por localidad y los gráficos desglosan
-     la cobertura bentónica, los grupos funcionales y las tendencias por año.
-     Elegí una localidad para abrir el detalle sitio por sitio."
-  )),
+  tags$div(class="sidebar-desc",
+    tags$p("Estado ecológico del intermareal medio según el índice RISI.
+            El mapa resume el RISI por localidad y los gráficos desglosan
+            la cobertura bentónica, los grupos funcionales y las tendencias
+            por año."),
+    actionLink("show_risi_modal_side", "+ info sobre RISI",
+      style = paste0("display:inline-block;margin-top:7px;font-size:11px;",
+                     "color:#6b8ca8;text-decoration:underline;"))
+  ),
   tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
   selectInput("sel_localidad","Parque / Localidad",choices=c("Todos"="ALL",localidades),selected="ALL"),
   selectInput("sel_year","Año",choices=c("Todos"="ALL",anios),selected="ALL"),
@@ -1275,12 +1284,11 @@ output$area_catami <- renderPlotly({
 
 ```{r sidebar_fc}
 tags$div(class="sidebar-inner",
-  tags$p(class="sidebar-desc", HTML(
-    "<strong>Cobertura del muestreo</strong>: dónde, cuándo y cuántas fotos se
-     tomaron. El mapa ubica cada fotocuadrante según su estrato mareal y la
-     matriz muestra qué combinaciones de sitio y año quedaron sin muestrear.
-     Elegí una localidad para ver sus fotos en CoralNet."
-  )),
+  tags$div(class="sidebar-desc",
+    tags$p("Cobertura de los muestreos: dónde, cuándo y cuántas fotos se
+            tomaron. El mapa ubica cada fotocuadrante con su posición
+            geográfica.")
+  ),
   tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
   # Localidad propia: esta pestaña filtra y encuadra por su cuenta,
   # sin depender de lo que se elija en Resultados.
