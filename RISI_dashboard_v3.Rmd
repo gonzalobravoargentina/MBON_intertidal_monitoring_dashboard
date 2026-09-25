@@ -231,6 +231,12 @@ catami_seleccion <- catami_seleccion[catami_seleccion %in% names(AMP)]
 localidades <- sort(unique(AMP$locality))
 anios       <- sort(unique(AMP$year))
 
+# Sitios de cada localidad, para el filtro dependiente de Fotocuadrantes
+sitios_por_loc <- AMP %>%
+  filter(!is.na(site), site != "") %>%
+  distinct(locality, site) %>%
+  arrange(locality, site)
+
 # ── Locality abbreviations (siglas) ──────────────────────────
 # First letters of each word in the locality name
 make_sigla <- function(x) {
@@ -322,9 +328,14 @@ classify_RISI <- function(x)
             x>=4.5~"Moderate", x>=3.5~"Poor", TRUE~"Bad")
 # El estrato es un parámetro: Resultados pasa "MIDTIDE" (el RISI se calcula
 # sólo sobre ese estrato) y Fotocuadrantes pasa el que elija el usuario.
-build_coralnet_url <- function(loc, yr = NULL, strata = NULL) {
+build_coralnet_url <- function(loc, yr = NULL, strata = NULL, site = NULL) {
   base <- paste0("https://coralnet.ucsd.edu/source/2897/browse/images/?aux3=",
                  gsub(" ", "+", loc))
+  # aux4 = sitio. Se deduce del orden de las columnas auxiliares
+  # (country, state, locality, site, strata -> aux1..aux5), consistente con
+  # aux3=locality y aux5=strata que ya sabemos correctos.
+  if (!is.null(site) && site != "ALL")
+    base <- paste0(base, "&aux4=", gsub(" ", "+", site))
   if (!is.null(strata) && strata != "ALL")
     base <- paste0(base, "&aux5=", strata)
   if (!is.null(yr) && yr != "ALL")
@@ -337,10 +348,13 @@ build_coralnet_url <- function(loc, yr = NULL, strata = NULL) {
 # mapa. Cada mapa la usa por su cuenta, así que compartirla no los acopla.
 # Se calcula sobre AMP (no sobre los datos filtrados) para que la vista
 # dependa únicamente de la localidad y no salte con año/estación/estrato.
-bounds_localidad <- function(loc_sel) {
+bounds_localidad <- function(loc_sel, site_sel = NULL) {
   df <- AMP %>% filter(!is.na(Latitude), !is.na(Longitude))
   if (!is.null(loc_sel) && loc_sel != "ALL")
     df <- df %>% filter(locality == loc_sel)
+  # site_sel es opcional: sólo lo usa el mapa de Fotocuadrantes
+  if (!is.null(site_sel) && site_sel != "ALL")
+    df <- df %>% filter(site == site_sel)
   if (nrow(df) == 0) return(NULL)
 
   lng_r <- range(as.numeric(df$Longitude), na.rm = TRUE)
@@ -614,10 +628,29 @@ AMP_filtrado_fc <- reactive({
   df <- AMP
   loc <- input$sel_loc_fc
   if (!is.null(loc)                  && loc!="ALL")               df <- df %>% filter(locality==loc)
+  # El sitio se aplica sólo si existe en lo ya filtrado. Al cambiar de
+  # localidad, el valor viejo sigue vivo un instante antes de que el
+  # observer repueble el selector; sin esta guarda el panel parpadearía
+  # vacío en ese intervalo.
+  sit <- input$sel_site_fc
+  if (!is.null(sit) && sit!="ALL" && sit %in% df$site)            df <- df %>% filter(site==sit)
   if (!is.null(input$sel_year_fc)   && input$sel_year_fc!="ALL")  df <- df %>% filter(year==as.integer(input$sel_year_fc))
   if (!is.null(input$sel_est_fc)    && input$sel_est_fc!="ALL")   df <- df %>% filter(estacion==input$sel_est_fc)
   if (!is.null(input$sel_strata_fc) && input$sel_strata_fc!="ALL")df <- df %>% filter(strata==input$sel_strata_fc)
   df
+})
+
+# El selector de sitio se repuebla con los sitios de la localidad elegida.
+# Sin localidad, queda inerte ("Todos"): listar sitios de todas las
+# localidades mezcladas no aportaría nada.
+observeEvent(input$sel_loc_fc, {
+  loc <- input$sel_loc_fc
+  ch  <- c("Todos" = "ALL")
+  if (!is.null(loc) && loc != "ALL") {
+    s  <- sitios_por_loc$site[sitios_por_loc$locality == loc]
+    if (length(s)) ch <- c(ch, setNames(s, s))
+  }
+  updateSelectInput(session, "sel_site_fc", choices = ch, selected = "ALL")
 })
 
 output$fotocuadrante_img <- renderImage(
@@ -661,8 +694,8 @@ dibujar_fc <- function(map, df) {
   )
 }
 
-# Memoria de sesión (NO reactiva) de la última localidad dibujada
-loc_fc_prev <- NULL
+# Memoria de sesión (NO reactiva): última combinación localidad||sitio
+clave_fc_prev <- NULL
 
 # ═══════════════════════════════════════════════════════════════════
 #  MAPA DE FOTOCUADRANTES — sin leafletProxy
@@ -672,24 +705,27 @@ loc_fc_prev <- NULL
 #  del usuario se conserva leyendo centro/zoom actuales del cliente.
 # ═══════════════════════════════════════════════════════════════════
 output$mapa_sitios <- renderLeaflet({
-  df  <- datos_fc_validos(AMP_filtrado_fc())
-  loc <- input$sel_loc_fc
+  df    <- datos_fc_validos(AMP_filtrado_fc())
+  loc   <- input$sel_loc_fc
+  sitio <- input$sel_site_fc
 
   # NO depende de la pestaña: cambiar de pestaña no debe redibujar nada.
   # Con el output suspendido mientras está oculta, este render sólo corre
   # con la pestaña visible, así que el contenedor siempre tiene tamaño real.
 
-  # Cambiar de localidad reencuadra; cualquier otro filtro conserva la vista
-  cambio_loc  <- !identical(loc_fc_prev, loc)
-  loc_fc_prev <<- loc
+  # Cambiar de localidad O de sitio reencuadra; año, estación y estrato
+  # conservan la vista.
+  clave          <- paste0(loc, "||", sitio)
+  cambio_encuadre <- !identical(clave_fc_prev, clave)
+  clave_fc_prev  <<- clave
 
   ctr <- isolate(input$mapa_sitios_center)
   zm  <- isolate(input$mapa_sitios_zoom)
-  b   <- bounds_localidad(loc)
+  b   <- bounds_localidad(loc, sitio)
 
   # Sólo se conserva la vista del usuario si es creíble: zoom razonable Y
   # centro en una zona plausible.
-  vista_util <- !cambio_loc &&
+  vista_util <- !cambio_encuadre &&
                 !is.null(ctr) && !is.null(zm) && zm >= 3 &&
                 centro_en_bounds(ctr, b)
 
@@ -1262,6 +1298,8 @@ tags$div(class="sidebar-inner",
   # Localidad propia: esta pestaña filtra y encuadra por su cuenta,
   # sin depender de lo que se elija en Resultados.
   selectInput("sel_loc_fc","Parque / Localidad",choices=c("Todos"="ALL",localidades),selected="ALL"),
+  # Se repuebla desde el servidor según la localidad elegida
+  selectInput("sel_site_fc","Sitio",choices=c("Todos"="ALL"),selected="ALL"),
   selectInput("sel_year_fc","Año",choices=c("Todos"="ALL",anios),selected="ALL"),
   selectInput("sel_est_fc","Estación",choices=c("Todas"="ALL","Cálida"="Cálida","Fría"="Fría"),selected="ALL"),
   selectInput("sel_strata_fc","Estrato",choices=c("Todos"="ALL","HIGHTIDE","MIDTIDE","LOWTIDE"),selected="ALL")
@@ -1270,9 +1308,11 @@ renderUI({
   loc    <- input$sel_loc_fc
   yr     <- input$sel_year_fc
   strata <- input$sel_strata_fc
+  sitio  <- input$sel_site_fc
   if (!is.null(loc) && loc != "ALL") {
-    url <- build_coralnet_url(loc, yr, strata)
+    url <- build_coralnet_url(loc, yr, strata, sitio)
     lbl_parts <- loc
+    if (!is.null(sitio)  && sitio  != "ALL") lbl_parts <- paste0(lbl_parts, " · ", sitio)
     if (!is.null(strata) && strata != "ALL") lbl_parts <- paste0(lbl_parts, " · ", strata)
     if (!is.null(yr)     && yr     != "ALL") lbl_parts <- paste0(lbl_parts, " (", yr, ")")
     lbl <- paste0("📷 Ver fotos – ", lbl_parts)
