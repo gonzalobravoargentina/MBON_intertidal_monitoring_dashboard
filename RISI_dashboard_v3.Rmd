@@ -328,12 +328,17 @@ classify_RISI <- function(x)
             x>=4.5~"Moderate", x>=3.5~"Poor", TRUE~"Bad")
 # El estrato es un parámetro: Resultados pasa "MIDTIDE" (el RISI se calcula
 # sólo sobre ese estrato) y Fotocuadrantes pasa el que elija el usuario.
+# Formato verificado contra un filtro real de CoralNet:
+#   ?aux3=<localidad>&aux4=<sitio>&aux5=<estrato>&photo_date_0=year&photo_date_1=<año>
+# Es decir aux1..aux5 = country, state, locality, site, strata.
 build_coralnet_url <- function(loc, yr = NULL, strata = NULL, site = NULL) {
+  # El chunk de datos renombra "PIMCPA_ISLA TOVA" a "PIMCPA ISLA TOVA" para
+  # mostrarlo prolijo, pero en CoralNet la localidad conserva el guion bajo.
+  # Sin revertir el renombre acá, el link de esa localidad no devuelve nada.
+  loc <- sub("^PIMCPA ISLA TOVA$", "PIMCPA_ISLA TOVA", loc)
+
   base <- paste0("https://coralnet.ucsd.edu/source/2897/browse/images/?aux3=",
                  gsub(" ", "+", loc))
-  # aux4 = sitio. Se deduce del orden de las columnas auxiliares
-  # (country, state, locality, site, strata -> aux1..aux5), consistente con
-  # aux3=locality y aux5=strata que ya sabemos correctos.
   if (!is.null(site) && site != "ALL")
     base <- paste0(base, "&aux4=", gsub(" ", "+", site))
   if (!is.null(strata) && strata != "ALL")
