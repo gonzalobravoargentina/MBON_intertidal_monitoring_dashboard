@@ -1297,7 +1297,8 @@ tags$div(class="sidebar-inner",
   tags$div(class="sidebar-desc",
     tags$p("Cobertura de los muestreos: dónde, cuándo y cuántas fotos se
             tomaron. El mapa ubica cada fotocuadrante con su posición
-            geográfica.")
+            geográfica. Los filtros de localidad, sitio, año y estrato
+            arman un enlace para ver esas mismas fotos en CoralNet.")
   ),
   tags$span(style="display:block;font-size:10px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px;","Filtros"),
   # Localidad propia: esta pestaña filtra y encuadra por su cuenta,
