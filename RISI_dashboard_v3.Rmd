@@ -1355,7 +1355,10 @@ output$plot_esfuerzo_fc <- renderPlotly({
     count(year,estacion,name="n_fotos") %>% arrange(year,estacion)
   req(nrow(df)>0)
   p <- ggplot(df,aes(x=factor(year),y=n_fotos,fill=estacion)) +
-    geom_col(position="dodge",width=0.65) +
+    # preserve="single": un año con una sola estación (p.ej. 2026) mantiene
+    # el ancho de una barra individual en vez de estirarse a ocupar las dos.
+    geom_col(width = 0.65,
+             position = position_dodge(width = 0.65, preserve = "single")) +
     scale_fill_manual(values=c("Cálida"="#E8522A","Fría"="#3B7EA1"),name="Estación") +
     labs(x="Año",y="Fotocuadrantes") +
     theme_minimal(base_size=10) +
@@ -1378,7 +1381,20 @@ output$matriz_completitud_fc <- renderPlotly({
 
   req(nrow(df_mat) > 0)
 
-  todos_y <- sort(unique(df_mat$eje_y))
+  # Orden geográfico norte→sur, igual que el heatmap RISI. Latitud
+  # ascendente = más al sur primero; como ggplot apila el eje y de abajo
+  # hacia arriba, el sur queda abajo y el norte arriba.
+  grp_var <- if (by_site) "site" else "locality"
+  df_lat  <- AMP %>% filter(!is.na(Latitude))
+  if (by_site) df_lat <- df_lat %>% filter(locality == input$sel_loc_fc)
+  lat_order <- df_lat %>%
+    group_by(across(all_of(grp_var))) %>%
+    summarise(lat_mn = mean(as.numeric(Latitude), na.rm = TRUE), .groups = "drop") %>%
+    arrange(lat_mn) %>%
+    pull(1)
+
+  todos_y <- lat_order[lat_order %in% unique(df_mat$eje_y)]
+  req(length(todos_y) > 0)
   todos_x <- sort(unique(df_mat$year))
 
   # Grilla completa: los huecos (combinaciones sin muestreo) quedan como "x"
@@ -1389,7 +1405,9 @@ output$matriz_completitud_fc <- renderPlotly({
       lbl     = ifelse(is.na(n_fotos), "x", as.character(n_fotos)),
       tooltip = ifelse(is.na(n_fotos),
                        paste0(eje_y, " – ", year, "\nSin datos"),
-                       paste0(eje_y, " – ", year, "\n", n_fotos, " fotos"))
+                       paste0(eje_y, " – ", year, "\n", n_fotos, " fotos")),
+      # al final: si no es factor, ggplot reordena alfabéticamente
+      eje_y   = factor(eje_y, levels = todos_y)
     )
 
   p <- ggplot(grid, aes(x = year_f, y = eje_y, fill = n_fotos, text = tooltip)) +
