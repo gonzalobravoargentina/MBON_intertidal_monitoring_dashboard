@@ -1569,6 +1569,14 @@ tags$div(style=s("max-width:760px;margin:0 auto;padding:36px 20px;",
   ),
 
   tags$p(style="margin-top:32px;font-size:12px;color:#a0b4be;font-style:italic;",
-    "Este dashboard es una herramienta dinámica en evolución, diseñada para apoyar la toma de decisiones, la gestión adaptativa y la comunicación científica.")
+    "Este dashboard es una herramienta dinámica en evolución, diseñada para apoyar la toma de decisiones, la gestión adaptativa y la comunicación científica."),
+
+  # Sello de versión: fecha del .Rmd tal como quedó en el servidor. Permite
+  # confirmar de un vistazo si lo publicado es la última versión, en vez de
+  # tener que adivinar si el deploy subió o si el navegador está cacheando.
+  tags$p(style="margin-top:6px;font-size:11px;color:#c3d2da;",
+    paste0("Versión del tablero: ",
+           tryCatch(format(file.info("RISI_dashboard_v3.Rmd")$mtime, "%Y-%m-%d %H:%M"),
+                    error = function(e) "desconocida")))
 )
 ```

@@ -1,0 +1,37 @@
+# Archivos que NO se suben a shinyapps.io.
+# El bundle pasa de ~49 MB a ~15 MB y deja un solo .Rmd en la carpeta,
+# asi que no queda ambiguedad sobre cual documento debe ejecutar el server.
+#
+# Lo que SI necesita RISI_dashboard_v3.Rmd y por eso no esta aca:
+#   DATA/metadata.csv, DATA/percent_covers.csv, CATAMI.png,
+#   fotocuadrante.png, logo_blanco.png
+
+# --- control de versiones y estado local de RStudio ---
+.git
+.gitignore
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.DS_Store
+MBON_intertidal_monitoring_dashboard.Rproj
+
+# --- registros de despliegues previos ---
+rsconnect
+
+# --- versiones anteriores del dashboard ---
+RISI_dashboard.Rmd
+RISI_dashboard_v2.Rmd
+RISI_dashboard_v2.1.Rmd
+
+# --- material no usado por el dashboard ---
+photo-gallery
+dashboard.png
+logo.png
+get_SST.R
+rutas_drive.csv
+Publicar Shiny.R
+README.md
+
+# --- CSV de correcciones para CoralNet (uso local) ---
+DATA/correcciones_coralnet
