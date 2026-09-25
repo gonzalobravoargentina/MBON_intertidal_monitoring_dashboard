@@ -211,20 +211,45 @@ options(dplyr.summarise.inform = FALSE)
 ```
 
 ```{r dataread, include=FALSE, message=FALSE, warning=FALSE}
-Data <- "DATA"
-cover    <- read_csv(file.path(Data, "percent_covers.csv"), show_col_types = FALSE)
-metadata <- read_csv(file.path(Data, "metadata.csv"),       show_col_types = FALSE)
-AMP <- merge(metadata, cover, by.x = "Name", by.y = "Image name", all.x = TRUE)
+Data      <- "DATA"
+csv_meta  <- file.path(Data, "metadata.csv")
+csv_cover <- file.path(Data, "percent_covers.csv")
+cache_amp <- file.path(Data, "AMP_cache.rds")
 
-AMP <- AMP %>%
-  mutate(
-    Date     = as.Date(Date),
-    year     = year(Date), month = month(Date),
-    estacion = ifelse(month %in% c(12,1,2,3,4,5), "Cálida", "Fría"),
-    Season   = ifelse(month %in% c(12,1,2,3,4,5), "WARM",   "COLD"),
-    strata   = toupper(strata),
-    locality = str_replace(locality, "PIMCPA_ISLA TOVA", "PIMCPA ISLA TOVA")
-  )
+# ── Caché de datos ───────────────────────────────────────────────────
+# Con runtime:shiny el documento se ejecuta entero en CADA sesión nueva,
+# así que sin caché se repiten dos read_csv de 13,5 MB y un merge de 43k
+# filas cada vez que alguien abre el tablero.
+#
+# La validez se decide por el TAMAÑO de los CSV, no por su fecha: al
+# empaquetar para shinyapps.io las marcas de tiempo se normalizan y una
+# comparación por fecha daría siempre "caché vencido".
+huella_csv <- paste0(file.size(csv_meta), "-", file.size(csv_cover))
+
+cache <- if (file.exists(cache_amp))
+           tryCatch(readRDS(cache_amp), error = function(e) NULL) else NULL
+
+if (!is.null(cache) && identical(cache$huella, huella_csv)) {
+  AMP <- cache$AMP
+} else {
+  cover    <- read_csv(csv_cover, show_col_types = FALSE)
+  metadata <- read_csv(csv_meta,  show_col_types = FALSE)
+  AMP <- merge(metadata, cover, by.x = "Name", by.y = "Image name", all.x = TRUE)
+
+  AMP <- AMP %>%
+    mutate(
+      Date     = as.Date(Date),
+      year     = year(Date), month = month(Date),
+      estacion = ifelse(month %in% c(12,1,2,3,4,5), "Cálida", "Fría"),
+      Season   = ifelse(month %in% c(12,1,2,3,4,5), "WARM",   "COLD"),
+      strata   = toupper(strata),
+      locality = str_replace(locality, "PIMCPA_ISLA TOVA", "PIMCPA ISLA TOVA")
+    )
+
+  # En shinyapps.io el disco puede ser de solo lectura: si falla, el
+  # tablero sigue funcionando, simplemente sin el atajo.
+  try(saveRDS(list(huella = huella_csv, AMP = AMP), cache_amp), silent = TRUE)
+}
 
 catami_seleccion <- c("MAEN","MAF","CRB","MAA","MAEC","MAG","MAS","MASR","MOB","MOG","SC","WPOT")
 catami_seleccion <- catami_seleccion[catami_seleccion %in% names(AMP)]
@@ -734,7 +759,7 @@ output$mapa_sitios <- renderLeaflet({
                 !is.null(ctr) && !is.null(zm) && zm >= 3 &&
                 centro_en_bounds(ctr, b)
 
-  m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
+  m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22, preferCanvas = TRUE)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
                      options = providerTileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
     # OSM en lugar de CartoDB: gratuito, sin API key, y con upscaling
@@ -853,7 +878,7 @@ output$mapa_indice <- renderLeaflet({
                 !is.null(ctr) && !is.null(zm) && zm >= 3 &&
                 centro_en_bounds(ctr, b)
 
-  m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22)) %>%
+  m <- leaflet(options = leafletOptions(zoomSnap = 0.25, maxZoom = 22, preferCanvas = TRUE)) %>%
     addProviderTiles(providers$Esri.WorldImagery, group = "Satélite",
                      options = providerTileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
     addTiles(group = "Mapa",
