@@ -65,6 +65,7 @@ select option { background-color: #1b2a3b; }
 .chart-block { background: white; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.07); padding: 12px 14px 10px 14px; }
 .section-title { font-size: 13px; font-weight: 700; color: #1b2a3b; border-left: 3px solid #2ecc71; padding-left: 8px; margin: 0 0 4px 0; }
 .section-desc { font-size: 11px; color: #7f8c8d; margin-bottom: 8px; line-height: 1.4; }
+#heatmap_risi .nsewdrag { cursor: pointer !important; }
 .leyenda-chips { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 8px 0; }
 .leyenda-chips .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #4a5a6a; white-space: nowrap; }
 .leyenda-chips .chip i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
@@ -1294,10 +1295,17 @@ output$heatmap_risi_title <- renderUI({
 
 output$heatmap_risi_desc <- renderUI({
   by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
-  if (by_site)
-    paste0("Estado ecológico (RISI) en cada sitio de ", input$sel_localidad, " a lo largo de los años de muestreo.")
+  base <- if (by_site)
+    paste0("Estado ecológico (RISI) en cada sitio de ", nombre_localidad(input$sel_localidad),
+           " a lo largo de los años de muestreo.")
   else
-    "Estado ecológico (RISI) promedio por localidad y año. Permite detectar tendencias y comparar áreas protegidas de un vistazo."
+    "Estado ecológico (RISI) promedio por localidad y año."
+  # CoralNet filtra por año, no por estación: con una estación seleccionada
+  # el link abre las fotos de ambas estaciones de ese año.
+  est <- input$sel_estacion
+  nota <- if (!is.null(est) && est != "ALL")
+    " (CoralNet abre el año completo, con ambas estaciones)." else "."
+  paste0(base, " Hacé click en una caja para ver esas fotos en CoralNet", nota)
 })
 
 output$heatmap_risi <- renderPlotly({
@@ -1332,7 +1340,12 @@ output$heatmap_risi <- renderPlotly({
   df_heat <- df_heat %>%
     mutate(RISI_class = factor(classify_RISI(RISI_val), levels = RISI_levels),
            # texto oscuro sobre los tonos claros (Good, Moderate)
-           txt_col = if_else(RISI_class %in% c("Good", "Moderate"), "#1a1a1a", "white"))
+           txt_col = if_else(RISI_class %in% c("Good", "Moderate"), "#1a1a1a", "white"),
+           # link a las fotos de esa caja: misma localidad/sitio, año y estrato
+           url = mapply(function(y, yr)
+                   if (by_site) build_coralnet_url(input$sel_localidad, yr, "MIDTIDE", y)
+                   else         build_coralnet_url(y, yr, "MIDTIDE"),
+                 as.character(eje_y), year, USE.NAMES = FALSE))
 
   p <- ggplot(df_heat,
     aes(x = factor(year), y = eje_y, fill = RISI_class,
@@ -1341,6 +1354,9 @@ output$heatmap_risi <- renderPlotly({
                       "<br>RISI: ", round(RISI_val, 2),
                       " (", RISI_class, ")"))) +
     geom_tile(color = "white", linewidth = 0.4) +
+    # Marcadores cuadrados casi transparentes, uno por caja, que cargan la URL
+    # en customdata: plotly no dispara clicks sobre el relleno de geom_tile.
+    geom_point(aes(customdata = url), shape = 15, size = 9, alpha = 0.01, colour = "white") +
     geom_text(aes(label = sprintf("%.1f", RISI_val), color = txt_col),
               size = 2.8, fontface = "bold") +
     scale_color_identity() +
@@ -1356,7 +1372,19 @@ output$heatmap_risi <- renderPlotly({
 
   ggplotly(p, tooltip = "text") %>%
     layout(showlegend = FALSE, margin = list(t = 5, r = 10, b = 40)) %>%
-    config(displayModeBar = FALSE)
+    config(displayModeBar = FALSE) %>%
+    # El click se resuelve en el navegador (no en el servidor) para que
+    # window.open() cuente como acción del usuario y no lo bloquee el
+    # bloqueador de ventanas emergentes.
+    htmlwidgets::onRender("
+      function(el) {
+        el.on('plotly_click', function(ev) {
+          var p = ev.points.find(function(q) {
+            return typeof q.customdata === 'string' && q.customdata.indexOf('http') === 0;
+          });
+          if (p) window.open(p.customdata, '_blank', 'noopener');
+        });
+      }")
 })
 
 # ── Área apilada CATAMI ───────────────────────────────────────
