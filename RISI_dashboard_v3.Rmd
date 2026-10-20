@@ -553,16 +553,23 @@ cobertura_estrato <- reactive({
     )
 })
 
+# Proporción de fotocuadrantes MIDTIDE en cada clase RISI, por localidad o
+# sitio. Se reporta en % (no en conteos) para no confundir esfuerzo de
+# muestreo con estado, y las filas van de norte a sur como el resto.
 conteo_indice_clases <- reactive({
   df <- AMP_index(); req(nrow(df)>0)
-  df <- df %>% mutate(RISI_class=factor(as.character(RISI_class),levels=RISI_levels,ordered=T))
+  df <- df %>% mutate(RISI_class=factor(as.character(RISI_class),levels=RISI_levels))
   by_site <- !is.null(input$sel_localidad)&&input$sel_localidad!="ALL"
-  if(by_site)
-    df %>% count(locality,site,RISI_class,name="n_fotos") %>%
-      mutate(etiqueta=fct_reorder(site,n_fotos,.fun=sum,.desc=T))
-  else
-    df %>% count(locality,RISI_class,name="n_fotos") %>%
-      mutate(etiqueta=fct_reorder(locality,n_fotos,.fun=sum,.desc=T))
+  y_var   <- if (by_site) "site" else "locality"
+  lat <- df %>% group_by(across(all_of(y_var))) %>%
+    summarise(lat=mean(as.numeric(Latitude),na.rm=TRUE),.groups="drop")
+  df %>% count(across(all_of(y_var)),RISI_class,name="n_fotos",.drop=FALSE) %>%
+    group_by(across(all_of(y_var))) %>%
+    mutate(n_total=sum(n_fotos), pct=100*n_fotos/n_total) %>% ungroup() %>%
+    filter(n_total>0) %>%
+    left_join(lat,by=y_var) %>%
+    mutate(nombre  = as.character(.data[[y_var]]),
+           etiqueta= if (by_site) nombre else nombre_localidad(nombre))
 })
 
 fotos_por_anio_estacion <- reactive({
@@ -1035,8 +1042,10 @@ tags$div(class="scroll-content",
           cursor:pointer;border:1px solid #c8d6e0;line-height:1;", "?")
       )
     ),
+    tags$p(class="section-desc",
+      "Porcentaje de fotocuadrantes del intermareal medio en cada clase de estado, por localidad (norte a sur). El total de fotocuadrantes figura a la derecha de cada barra."),
     uiOutput("btn_coralnet"),
-    plotlyOutput("barras_indice_clases",height="340px")
+    plotlyOutput("barras_indice_clases",height="400px")
   ),
 
 )
@@ -1176,21 +1185,29 @@ output$barras_indice_clases <- renderPlotly({
   dfc <- conteo_indice_clases(); req(nrow(dfc)>0)
   by_site <- !is.null(input$sel_localidad)&&input$sel_localidad!="ALL"
   etiq_y  <- if(by_site) "Sitio" else "Localidad"
-  # Show siglas on y-axis for localities
-  label_fn <- if(!by_site) {
-    function(x) ifelse(x%in%names(siglas_localidades),siglas_localidades[x],x)
-  } else function(x) x
+  # norte arriba: en coord_flip el primer nivel queda abajo
+  orden <- dfc %>% distinct(etiqueta,lat) %>% arrange(lat) %>% pull(etiqueta)
+  dfc <- dfc %>% mutate(etiqueta=factor(etiqueta,levels=unique(orden)))
+  n_lab <- dfc %>% distinct(etiqueta,n_total)
 
-  p <- ggplot(dfc,aes(x=etiqueta,y=n_fotos,fill=RISI_class,
-    text=paste0(etiq_y,": ",etiqueta,"<br>Clase: ",RISI_class,"<br>N: ",n_fotos))) +
-    geom_col(width=0.7) + coord_flip() +
-    scale_x_discrete(labels=label_fn) +
-    scale_fill_manual(values=class_cols,drop=FALSE) +
-    labs(x=etiq_y,y="N° fotocuadrantes (MIDTIDE)",fill="Clase RISI") +
+  p <- ggplot(dfc %>% filter(n_fotos>0),
+              aes(x=etiqueta,y=pct,fill=RISI_class,
+    text=paste0(etiq_y,": ",etiqueta,"<br>Clase: ",RISI_class,
+                "<br>",round(pct,1),"% (",n_fotos," de ",n_total," fotocuadrantes)"))) +
+    geom_col(width=0.75,position=position_stack(reverse=TRUE)) + coord_flip() +
+    geom_text(data=n_lab,aes(x=etiqueta,y=101.5,label=paste0("n=",n_total)),
+              inherit.aes=FALSE,hjust=0,size=2.7,colour="#7f8c8d") +
+    scale_y_continuous(limits=c(0,114),breaks=c(0,25,50,75,100),
+                       labels=function(x) paste0(x,"%"),expand=c(0,0)) +
+    scale_fill_manual(values=class_cols,drop=FALSE,breaks=rev(RISI_levels)) +
+    labs(x=NULL,y="Fotocuadrantes del intermareal medio (%)",fill="Clase RISI") +
     theme_minimal(base_size=10) +
     theme(legend.position="top",legend.title=element_text(face="bold",size=9),
-          axis.text.y=element_text(size=9))
-  ggplotly(p,tooltip="text") %>% config(displayModeBar = FALSE)
+          axis.text.y=element_text(size=9,colour="#333333"),
+          panel.grid.major.y=element_blank(),panel.grid.minor=element_blank())
+  ggplotly(p,tooltip="text") %>%
+    layout(legend=list(orientation="h",x=0,y=1.08,traceorder="normal")) %>%
+    config(displayModeBar = FALSE)
 })
 
 output$plot_anio_estacion <- renderPlotly({
