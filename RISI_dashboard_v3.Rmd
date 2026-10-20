@@ -1223,19 +1223,24 @@ output$heatmap_risi <- renderPlotly({
 
   y_label <- if (by_site) "Sitio" else "Localidad"
 
+  # Misma paleta discreta de clases que el mapa y "Distribución de clases",
+  # para que un mismo valor de RISI tenga el mismo color en toda la pestaña.
+  df_heat <- df_heat %>%
+    mutate(RISI_class = factor(classify_RISI(RISI_val), levels = RISI_levels),
+           # texto oscuro sobre los tonos claros (Good, Moderate)
+           txt_col = if_else(RISI_class %in% c("Good", "Moderate"), "#1a1a1a", "white"))
+
   p <- ggplot(df_heat,
-    aes(x = factor(year), y = eje_y, fill = RISI_val,
+    aes(x = factor(year), y = eje_y, fill = RISI_class,
         text = paste0(y_label, ": ", eje_y,
                       "<br>Año: ", year,
-                      "<br>RISI: ", round(RISI_val, 2)))) +
+                      "<br>RISI: ", round(RISI_val, 2),
+                      " (", RISI_class, ")"))) +
     geom_tile(color = "white", linewidth = 0.4) +
-    scale_fill_gradientn(
-      colors = c("#a50026","#d73027","#f46d43","#fdae61","#ffffbf",
-                 "#a6d96a","#1a9641","#006837"),
-      limits = c(0, 10), name = "RISI",
-      breaks = c(0, 3.5, 4.5, 6, 7.5, 10),
-      labels = c("0","Bad","Poor","Mod","Good","10")
-    ) +
+    geom_text(aes(label = sprintf("%.1f", RISI_val), color = txt_col),
+              size = 2.8, fontface = "bold") +
+    scale_color_identity() +
+    scale_fill_manual(values = class_cols, drop = FALSE, name = "Clase RISI") +
     labs(x = "Año", y = y_label) +
     theme_minimal(base_size = 10) +
     theme(
