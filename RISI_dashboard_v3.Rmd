@@ -1222,7 +1222,6 @@ tags$div(class="scroll-content",
     tags$p(class="section-desc",
       "Porcentaje de fotocuadrantes del intermareal medio en cada clase de estado, por localidad (norte a sur). El total de fotocuadrantes figura a la derecha de cada barra."),
     leyenda_html(class_cols[RISI_levels]),
-    uiOutput("btn_coralnet"),
     plotlyOutput("barras_indice_clases",height="380px")
   ),
 
@@ -1299,21 +1298,6 @@ output$barras_cobertura <- renderPlotly({
     config(displayModeBar = FALSE)
 })
 
-output$btn_coralnet <- renderUI({
-  if(is.null(input$sel_localidad)||input$sel_localidad=="ALL")
-    tags$small(style="color:#aaa;font-size:11px;","Seleccioná una localidad para ver fotos en CoralNet.")
-  else {
-    yr  <- input$sel_year
-    lbl <- if (!is.null(yr) && yr != "ALL")
-             paste0("📷 Ver fotos MIDTIDE en CoralNet: ", input$sel_localidad, " (", yr, ")")
-           else
-             paste0("📷 Ver fotos MIDTIDE en CoralNet: ", input$sel_localidad)
-    # MIDTIDE explícito: el RISI se calcula sólo sobre ese estrato,
-    # y la etiqueta del botón lo promete.
-    tags$a(href=build_coralnet_url(input$sel_localidad, yr, "MIDTIDE"), target="_blank",
-           class="coralnet-link", lbl)
-  }
-})
 
 # Cobertura media de MOB en el intermareal medio por campaña (año x estación),
 # un panel por localidad (o por sitio si hay una localidad filtrada).
