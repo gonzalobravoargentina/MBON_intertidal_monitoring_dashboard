@@ -66,6 +66,16 @@ select option { background-color: #1b2a3b; }
 .section-title { font-size: 13px; font-weight: 700; color: #1b2a3b; border-left: 3px solid #2ecc71; padding-left: 8px; margin: 0 0 4px 0; }
 .section-desc { font-size: 11px; color: #7f8c8d; margin-bottom: 8px; line-height: 1.4; }
 #heatmap_risi .nsewdrag { cursor: pointer !important; }
+svg.risi-callouts { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 450; overflow: visible; }
+.risi-callout-line { stroke: #ffffff; stroke-width: 1.3; opacity: 0.9; }
+.risi-tether { stroke: #ffffff; stroke-width: 1; opacity: 0.85; }
+.risi-anchor { fill: #ffffff; }
+.risi-dot { pointer-events: auto; cursor: pointer; }
+.risi-dot circle { stroke: #ffffff; stroke-width: 1.5; }
+.risi-dot-val { font: 700 10.5px "Source Sans Pro", Helvetica, Arial, sans-serif; fill: #ffffff; text-anchor: middle;
+                paint-order: stroke; stroke: #1b2a3b; stroke-width: 2px; stroke-linejoin: round; }
+.risi-callout-text { font: 600 11px "Source Sans Pro", Helvetica, Arial, sans-serif; fill: #ffffff;
+                     paint-order: stroke; stroke: #1b2a3b; stroke-width: 3px; stroke-linejoin: round; }
 .leyenda-chips { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 8px 0; }
 .leyenda-chips .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #4a5a6a; white-space: nowrap; }
 .leyenda-chips .chip i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
@@ -534,13 +544,13 @@ indice_resumen_mapa <- reactive({
       summarise(lon=mean(as.numeric(Longitude),na.rm=T),lat=mean(as.numeric(Latitude),na.rm=T),
                 RISI_mean=mean(RISI,na.rm=T),n_fotos=n(),.groups="drop") %>%
       mutate(RISI_class=factor(classify_RISI(RISI_mean),levels=RISI_levels,ordered=T),
-             etiqueta=site, sigla=site)
+             etiqueta=site, sigla=site, nombre=str_to_title(site))
   else
     df %>% group_by(locality) %>%
       summarise(lon=mean(as.numeric(Longitude),na.rm=T),lat=mean(as.numeric(Latitude),na.rm=T),
                 RISI_mean=mean(RISI,na.rm=T),n_fotos=n(),.groups="drop") %>%
       mutate(RISI_class=factor(classify_RISI(RISI_mean),levels=RISI_levels,ordered=T),
-             etiqueta=locality,
+             etiqueta=nombre_localidad(locality), nombre=nombre_localidad(locality),
              sigla=ifelse(locality %in% names(siglas_localidades), siglas_localidades[locality], locality))
 })
 
@@ -949,29 +959,121 @@ leafletOutput("mapa_indice", height="100%", width="100%")
 #  ni estado con mapa_sitios.
 # ═══════════════════════════════════════════════════════════════════
 
-# Dibuja los puntos del índice sobre el mapa
+# Marcadores del índice. Son INVISIBLES: los círculos visibles (con el valor
+# adentro y el nombre afuera) los dibuja agregar_rotulos() en una capa SVG.
+# Estos quedan en la posición real para conservar el popup, que se abre al
+# hacer click en el círculo visible.
 dibujar_indice <- function(map, pts, titulo_popup) {
-  pts <- pts %>% mutate(radius = rescale(RISI_mean, to = c(7,20), from = c(0,10)))
-  pal_class <- colorFactor(palette=unname(class_cols[RISI_levels]),domain=RISI_levels,ordered=TRUE)
   addCircleMarkers(map, data = pts,
-    lng=~lon,lat=~lat,radius=~radius,weight=1,
-    color="white",fillColor=~pal_class(as.character(RISI_class)),fillOpacity=0.9,
-    label=~sigla,
-    labelOptions=labelOptions(
-      permanent=TRUE, noHide=TRUE, textOnly=TRUE, direction="center",
-      style=list(
-        "color"="#1b2a3b","font-weight"="bold","font-size"="10px",
-        "text-shadow"="1px 1px 0 white,-1px -1px 0 white,1px -1px 0 white,-1px 1px 0 white"
-      )
-    ),
+    lng=~lon, lat=~lat, radius=13, opacity=0, fillOpacity=0,
     popup=~paste0(
       "<b>",titulo_popup,":</b> ",etiqueta,
-      if(titulo_popup=="Sitio") paste0("<br><i>",locality,"</i>") else "",
+      if(titulo_popup=="Sitio") paste0("<br><i>",nombre_localidad(locality),"</i>") else "",
       "<br><b>RISI:</b> ",round(RISI_mean,2),
       "<br><b>Clase:</b> <strong>",as.character(RISI_class),"</strong>",
       "<br><b>Fotos MIDTIDE:</b> ",n_fotos
     )
   )
+}
+
+# Círculos del RISI, todos del mismo tamaño y con el valor medio adentro, y
+# nombres completos afuera unidos por una línea guía. Todo se dibuja en
+# píxeles de pantalla (capa SVG) y se recalcula en cada zoom/movimiento:
+#  - si dos círculos se pisan (Playa Larga–PNTDF, las dos PIMCPA, Cabo Dos
+#    Bahías) se separan lo justo y un hilo los une a su ubicación real;
+#  - los nombres se escalonan en vertical y arrancan después de todos los
+#    círculos que haya a su altura; si no entran a la derecha, van a la izquierda;
+#  - el click en un círculo abre el popup del marcador real.
+agregar_rotulos <- function(map, pts) {
+  rot <- data.frame(lat = pts$lat, lng = pts$lon, name = pts$nombre,
+                    val = sprintf("%.1f", pts$RISI_mean),
+                    col = unname(class_cols[as.character(pts$RISI_class)]))
+  htmlwidgets::onRender(map, "
+function(el, x, data) {
+  var map = this, NS = 'http://www.w3.org/2000/svg';
+  el.querySelectorAll('svg.risi-callouts').forEach(function(n){ n.remove(); });
+  var pts = HTMLWidgets.dataframeToD3(data);
+  // marcadores de Leaflet (invisibles) que tienen el popup de cada punto
+  var capas = [];
+  map.eachLayer(function(l){ if (l instanceof L.CircleMarker) capas.push(l); });
+  pts.forEach(function(d){
+    d.capa = capas.find(function(l){
+      var q = l.getLatLng(); return Math.abs(q.lat - d.lat) < 1e-6 && Math.abs(q.lng - d.lng) < 1e-6;
+    });
+  });
+  var svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'risi-callouts');
+  map.getContainer().appendChild(svg);
+  var R = 13, MIN = 2 * R + 2, GAP = 15, DX = 34;
+  function el_(tag, attrs, parent) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    (parent || svg).appendChild(e); return e;
+  }
+  function draw() {
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var W = map.getSize().x, H = map.getSize().y;
+    var it = pts.map(function(d){
+      var p = map.latLngToContainerPoint([d.lat, d.lng]);
+      return {d: d, p: p, x: p.x, y: p.y};
+    }).filter(function(o){ return o.p.x > -40 && o.p.x < W + 40 && o.p.y > -40 && o.p.y < H + 40; });
+    // 1) separar círculos que se pisan (repulsión en píxeles)
+    for (var k = 0; k < 120; k++) {
+      var mov = false;
+      for (var i = 0; i < it.length; i++) for (var j = i + 1; j < it.length; j++) {
+        var a = it[i], b = it[j], dx = b.x - a.x, dy = b.y - a.y, dd = Math.sqrt(dx*dx + dy*dy);
+        if (dd < MIN) {
+          if (dd < 0.01) { dx = 0; dy = 1; dd = 1; }
+          var e = (MIN - dd) / 2, ux = dx / dd, uy = dy / dd;
+          a.x -= ux * e; a.y -= uy * e; b.x += ux * e; b.y += uy * e; mov = true;
+        }
+      }
+      if (!mov) break;
+    }
+    // 2) nombres: escalonados en vertical, hacia el lado que entre
+    var lab = it.slice().sort(function(a, b){ return a.y - b.y; });
+    lab.forEach(function(o){ o.ly = o.y; });
+    for (var i = 1; i < lab.length; i++)
+      if (lab[i].ly - lab[i-1].ly < GAP) lab[i].ly = lab[i-1].ly + GAP;
+    var over = lab.length ? lab[lab.length-1].ly - (H - 10) : 0;
+    if (over > 0) lab.forEach(function(o){ o.ly -= over; });
+    var gl = el_('g', {}), gc = el_('g', {});
+    it.forEach(function(o){
+      // hilo a la ubicación real si el círculo se desplazó
+      if (Math.abs(o.x - o.p.x) + Math.abs(o.y - o.p.y) > 3) {
+        el_('line', {x1: o.p.x, y1: o.p.y, x2: o.x, y2: o.y, 'class': 'risi-tether'}, gl);
+        el_('circle', {cx: o.p.x, cy: o.p.y, r: 2.2, 'class': 'risi-anchor'}, gl);
+      }
+      var t = el_('text', {'class': 'risi-callout-text'}, gl); t.textContent = o.d.name;
+      var w = t.getComputedTextLength();
+      // el nombre arranca después de TODOS los círculos que haya a su altura,
+      // no sólo del propio: así no queda escrito encima de un vecino
+      var vec = it.filter(function(c){ return Math.abs(c.y - o.ly) < R + 7; }).concat([o]);
+      var xr = Math.max.apply(null, vec.map(function(c){ return c.x; })) + R + 18;
+      var xl = Math.min.apply(null, vec.map(function(c){ return c.x; })) - R - 18;
+      xr = Math.max(xr, o.x + DX); xl = Math.min(xl, o.x - DX);
+      var right = xr + 4 + w < W - 6;
+      var lx = right ? xr : xl;
+      t.setAttribute('x', right ? lx + 4 : lx - 4); t.setAttribute('y', o.ly + 4);
+      t.setAttribute('text-anchor', right ? 'start' : 'end');
+      var ang = Math.atan2(o.ly - o.y, lx - o.x);
+      var ln = el_('line', {x1: o.x + R*Math.cos(ang), y1: o.y + R*Math.sin(ang), x2: lx, y2: o.ly,
+                            'class': 'risi-callout-line'}, gl);
+      gl.insertBefore(ln, t);
+      // círculo con el valor; el click abre el popup del marcador real
+      var g = el_('g', {'class': 'risi-dot'}, gc);
+      el_('circle', {cx: o.x, cy: o.y, r: R, fill: o.d.col}, g);
+      var v = el_('text', {x: o.x, y: o.y + 3.6, 'class': 'risi-dot-val'}, g); v.textContent = o.d.val;
+      g.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        if (o.d.capa) o.d.capa.openPopup();
+      });
+    });
+  }
+  map.on('zoomstart', function(){ svg.style.display = 'none'; });
+  map.on('zoomend moveend resize viewreset', function(){ svg.style.display = ''; draw(); });
+  draw();
+}", data = rot)
 }
 
 # Memoria de sesión (NO reactiva) de la última localidad dibujada
@@ -1009,7 +1111,7 @@ output$mapa_indice <- renderLeaflet({
 
   if (!is.null(pts) && nrow(pts) > 0) {
     lab <- if (!is.null(loc) && loc != "ALL") "Sitio" else "Localidad"
-    m <- dibujar_indice(m, pts, lab)
+    m <- dibujar_indice(m, pts, lab) %>% agregar_rotulos(pts)
   }
 
   if (vista_util) {
