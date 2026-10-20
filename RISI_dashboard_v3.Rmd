@@ -355,16 +355,34 @@ colores_catami_fixed <- c(
 ```
 
 ```{r risi_params, include=FALSE}
-W_core <- c(BIO=25, DIST=20); Wsum4_core <- sum(W_core)*4
+# Parámetros del RISI. FUENTE ÚNICA: el cálculo del índice y el modal
+# "info sobre RISI" (que se abre desde tres lugares) se arman a partir de
+# estas variables. Cambiar un valor acá cambia el índice y su explicación.
+W_core <- c(BIO=25, TBS=20); Wsum4_core <- sum(W_core)*4
 masr_factor<-.8; mas_factor<-.4; maen_factor<-.25
 MOB_threshold<-5; MASR_threshold<-10; w_SC<-.6; w_MAF<-.4
 SC_collapse_thresh<-85; MOB_collapse_thresh<-10; RISI_collapse_cap<-2.0
+# Umbrales de puntaje (score 4, 3, 2, 1; por debajo/encima del último = 0)
+thr_BIO      <- c(50, 25, 10, 1)   # BIO:  >50 = 4, >=25 = 3, >=10 = 2, >=1 = 1
+thr_SC       <- c(5, 15, 30, 60)   # SC:   <=5 = 4 ... >60 = 0 (igual todo el año)
+thr_MAF_warm <- c(15, 30, 50, 70)  # MAF en estación cálida
+thr_MAF_cold <- c(5, 15, 30, 60)   # MAF en estación fría
+# Límite inferior de cada clase de estado
+risi_breaks  <- c(High=7.5, Good=6.0, Moderate=4.5, Poor=3.5)
 RISI_levels <- c("High","Good","Moderate","Poor","Bad")
 class_cols  <- c("Bad"="#B71C1C","Poor"="#FB8C00","Moderate"="#c9a800","Good"="#66C2A5","High"="#3B7EA1")
 
 # Leyenda en HTML, construida a partir del MISMO vector de colores que usa el
 # gráfico. Va en el texto de la tarjeta (no dentro de plotly), así se acomoda
 # sola al ancho de la ventana y nunca se encima con los ejes.
+# Botón "?" que abre un modal (mismo aspecto en todas las tarjetas)
+boton_info <- function(id)
+  actionLink(id, tags$span(style="
+    display:inline-flex;align-items:center;justify-content:center;
+    width:16px;height:16px;border-radius:50%;
+    background:#e8ecf0;color:#5d7a96;font-size:10px;font-weight:700;
+    cursor:pointer;border:1px solid #c8d6e0;line-height:1;", "?"))
+
 leyenda_html <- function(cols) {
   tags$div(class = "leyenda-chips",
     lapply(names(cols), function(n)
@@ -373,18 +391,20 @@ leyenda_html <- function(cols) {
 }
 
 S_bio_fun <- function(bio)
-  case_when(is.na(bio)~NA_real_, bio>50~4, bio>=25~3, bio>=10~2, bio>=1~1, TRUE~0)
-S_inv_SC <- function(x)
-  case_when(is.na(x)~NA_real_, x<=5~4, x<=15~3, x<=30~2, x<=60~1, TRUE~0)
-S_inv_MAF_warm <- function(x)
-  case_when(is.na(x)~NA_real_, x<=15~4, x<=30~3, x<=50~2, x<=70~1, TRUE~0)
-S_inv_MAF_cold <- function(x)
-  case_when(is.na(x)~NA_real_, x<=5~4, x<=15~3, x<=30~2, x<=60~1, TRUE~0)
+  case_when(is.na(bio)~NA_real_, bio>thr_BIO[1]~4, bio>=thr_BIO[2]~3,
+            bio>=thr_BIO[3]~2, bio>=thr_BIO[4]~1, TRUE~0)
+score_inv <- function(x, t)
+  case_when(is.na(x)~NA_real_, x<=t[1]~4, x<=t[2]~3, x<=t[3]~2, x<=t[4]~1, TRUE~0)
+S_inv_SC       <- function(x) score_inv(x, thr_SC)
+S_inv_MAF_warm <- function(x) score_inv(x, thr_MAF_warm)
+S_inv_MAF_cold <- function(x) score_inv(x, thr_MAF_cold)
 S_inv_MAF_phenological <- function(x, season)
   case_when(season=="WARM"~S_inv_MAF_warm(x), TRUE~S_inv_MAF_cold(x))
 classify_RISI <- function(x)
-  case_when(is.na(x)~NA_character_, x>=7.5~"High", x>=6.0~"Good",
-            x>=4.5~"Moderate", x>=3.5~"Poor", TRUE~"Bad")
+  case_when(is.na(x)~NA_character_,
+            x>=risi_breaks[["High"]]~"High", x>=risi_breaks[["Good"]]~"Good",
+            x>=risi_breaks[["Moderate"]]~"Moderate", x>=risi_breaks[["Poor"]]~"Poor",
+            TRUE~"Bad")
 # El estrato es un parámetro: Resultados pasa "MIDTIDE" (el RISI se calcula
 # sólo sobre ese estrato) y Fotocuadrantes pasa el que elija el usuario.
 # Formato verificado contra un filtro real de CoralNet:
@@ -451,19 +471,26 @@ centro_en_bounds <- function(ctr, b, holgura = 1) {
 
 
 # HTML pill control rendered on top of the leaflet map
-risi_pills_html <- HTML(paste0(
-  '<div style="background:rgba(255,255,255,0.95);padding:7px 11px;border-radius:7px;',
-  'box-shadow:0 1px 6px rgba(0,0,0,0.2);pointer-events:none;">',
-  '<div style="font-size:12px;font-weight:700;color:#1b2a3b;border-left:3px solid #2ecc71;',
-  'padding-left:7px;margin-bottom:5px;">Estado ecológico (RISI)</div>',
-  '<div style="display:flex;gap:3px;flex-wrap:wrap;">',
-  '<span style="background:#3B7EA1;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">High ≥7.5</span>',
-  '<span style="background:#66C2A5;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Good 6–7.5</span>',
-  '<span style="background:#c9a800;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Moderate 4.5–6</span>',
-  '<span style="background:#FB8C00;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Poor 3.5–4.5</span>',
-  '<span style="background:#B71C1C;color:white;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">Bad &lt;3.5</span>',
-  '</div></div>'
-))
+# Leyenda del mapa: cortes y colores leídos de risi_breaks y class_cols
+risi_pills_html <- local({
+  f  <- function(x) format(x, trim = TRUE, drop0trailing = TRUE)
+  rb <- risi_breaks
+  rng <- c(High     = paste0("≥", f(rb[["High"]])),
+           Good     = paste0(f(rb[["Good"]]), "–", f(rb[["High"]])),
+           Moderate = paste0(f(rb[["Moderate"]]), "–", f(rb[["Good"]])),
+           Poor     = paste0(f(rb[["Poor"]]), "–", f(rb[["Moderate"]])),
+           Bad      = paste0("&lt;", f(rb[["Poor"]])))
+  pills <- vapply(RISI_levels, function(cl)
+    paste0('<span style="background:', class_cols[[cl]], ';color:white;padding:2px 7px;',
+           'border-radius:10px;font-size:10px;font-weight:700;">', cl, ' ', rng[[cl]], '</span>'), "")
+  HTML(paste0(
+    '<div style="background:rgba(255,255,255,0.95);padding:7px 11px;border-radius:7px;',
+    'box-shadow:0 1px 6px rgba(0,0,0,0.2);pointer-events:none;">',
+    '<div style="font-size:12px;font-weight:700;color:#1b2a3b;border-left:3px solid #2ecc71;',
+    'padding-left:7px;margin-bottom:5px;">Estado ecológico (RISI)</div>',
+    '<div style="display:flex;gap:3px;flex-wrap:wrap;">', paste0(pills, collapse = ""),
+    '</div></div>'))
+})
 ```
 
 ```{r reactives, include=FALSE}
@@ -486,10 +513,10 @@ AMP_index <- reactive({
       across(c(MOB,MASR,MAS,MAEN,MAF,SC), as.numeric),
       MASR_cov=coalesce(MASR,0), MAS_group=coalesce(MAS,0), MAEN_cov=coalesce(MAEN,0),
       BIO=pmin(100, coalesce(MOB,0)+masr_factor*MASR_cov+mas_factor*MAS_group+maen_factor*MAEN_cov),
-      S_BIO=if_else((MAS_group>0)&(coalesce(MOB,0)<MOB_threshold)&(MASR_cov<MASR_threshold),1,S_bio_fun(BIO)),
+      S_BIO=if_else((MAS_group>0)&(coalesce(MOB,0)<MOB_threshold)&(MASR_cov<MASR_threshold),pmin(S_bio_fun(BIO),1),S_bio_fun(BIO)),
       S_MAF=S_inv_MAF_phenological(coalesce(MAF,0),Season),
-      S_SC=S_inv_SC(coalesce(SC,0)), S_DIST=w_MAF*S_MAF+w_SC*S_SC,
-      num=W_core["BIO"]*S_BIO+W_core["DIST"]*S_DIST,
+      S_SC=S_inv_SC(coalesce(SC,0)), S_TBS=w_MAF*S_MAF+w_SC*S_SC,
+      num=W_core["BIO"]*S_BIO+W_core["TBS"]*S_TBS,
       RISI_raw=(num/Wsum4_core)*10, SC_val=coalesce(SC,0),
       RISI=if_else(SC_val>=SC_collapse_thresh&coalesce(MOB,0)<MOB_collapse_thresh,pmin(RISI_raw,RISI_collapse_cap),RISI_raw),
       RISI_class=factor(classify_RISI(RISI),levels=RISI_levels,ordered=TRUE)
@@ -604,7 +631,7 @@ output$download_csv <- downloadHandler(
     ri <- isolate(AMP_index()) %>%
       select(Name, locality, site, strata, Date, year, estacion, Season,
              Latitude, Longitude, any_of(catami_seleccion),
-             RISI, RISI_class, BIO, S_BIO, S_DIST, RISI_raw)
+             RISI, RISI_class, BIO, S_BIO, S_TBS, RISI_raw)
     write.csv(ri, file, row.names=FALSE, fileEncoding="UTF-8")
   }
 )
@@ -631,99 +658,113 @@ observeEvent(input$show_catami_modal, {
   ))
 })
 
-# Definición única del modal: se abre desde el panel de Resultados y desde
-# el enlace "+ info sobre RISI" del sidebar.
+# ── Modal "info sobre RISI" ───────────────────────────────────
+# Definición ÚNICA: lo abren el enlace "+ info sobre RISI" de la barra lateral
+# y los "?" de "RISI por localidad y año" y "Distribución de clases RISI".
+# Todo número, umbral y color se lee de los parámetros del chunk risi_params,
+# así que el texto no puede quedar desfasado del cálculo.
+contenido_modal_risi <- function() {
+  f   <- function(x) format(x, trim = TRUE, drop0trailing = TRUE, nsmall = 0)
+  sec <- function(t) paste0('<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;',
+                            'letter-spacing:0.7px;margin-bottom:6px;">', t, '</p>')
+  formula <- function(t, col = "#4a90d9")
+    paste0('<p style="background:#f7fafc;border-left:3px solid ', col, ';padding:8px 12px;',
+           'border-radius:4px;font-family:monospace;font-size:12px;">', t, '</p>')
+  hr  <- '<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">'
+  td  <- function(x, center = FALSE)
+    paste0('<td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;',
+           if (center) 'text-align:center;font-weight:700;' else '', '">', x, '</td>')
+  tabla <- function(cab, filas) {
+    h <- paste0('<tr style="background:#edf2f7;">',
+                paste0('<th style="padding:5px 8px;text-align:left;">', cab, '</th>', collapse = ""), '</tr>')
+    b <- vapply(seq_along(filas), function(i)
+      paste0('<tr', if (i %% 2 == 0) ' style="background:#f7fafc;"' else '', '>',
+             td(filas[[i]][1], TRUE), paste0(vapply(filas[[i]][-1], td, ""), collapse = ""), '</tr>'), "")
+    paste0('<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">',
+           h, paste0(b, collapse = ""), '</table>')
+  }
+  # filas de un puntaje inverso (<= umbral)
+  filas_inv <- function(var, ...) {
+    ts <- list(...)
+    c(lapply(1:4, function(k) c(5 - k, vapply(ts, function(t) paste0(var, " ≤ ", f(t[k]), "%"), ""))),
+      list(c(0, vapply(ts, function(t) paste0(var, " &gt; ", f(t[4]), "%"), ""))))
+  }
+  wB <- W_core[["BIO"]]; wT <- W_core[["TBS"]]
+
+  # chips de clase, con los mismos colores y cortes que usa el índice
+  lo <- c(risi_breaks[RISI_levels[-5]], Bad = 0)
+  hi <- c(High = 10, risi_breaks[RISI_levels[-5]])[RISI_levels]
+  chips <- vapply(RISI_levels, function(cl) {
+    rng <- if (cl == "High") paste0(sprintf("%.1f", lo[[cl]]), "–10.0")
+           else paste0(sprintf("%.1f", lo[[cl]]), "–", sprintf("%.2f", hi[[cl]] - 0.01))
+    paste0('<span style="background:', class_cols[[cl]], ';color:white;padding:4px 10px;',
+           'border-radius:12px;font-size:11px;font-weight:700;">', cl, ' ', rng, '</span>')
+  }, "")
+
+  HTML(paste0(
+'<div style="font-size:13px;color:#2d3748;line-height:1.7;font-family:inherit;">',
+'<p>El <strong>RISI</strong> (Bravo et al. 2026, <em>Environmental Research</em>) es un índice multimétrico ',
+'que mide el estado ecológico del intermareal rocoso a partir de fotocuadrantes del <strong>intermareal medio (MIDTIDE)</strong>. ',
+'Sigue el marco conceptual del Ecosystem-Based Quality Index (EBQI, Personnic et al. 2014) y refleja el ',
+'<strong>balance entre la estructura biogénica y la cobertura de césped algal y sustrato desnudo</strong>. ',
+'Las coberturas se obtienen por clasificación automática con IA (CoralNet). El índice se calcula para cada ',
+'fotocuadrante y luego se promedia.</p>', hr,
+
+sec(paste0("Compartimento BIO — estructura biogénica · peso ", f(wB))),
+'<p>Contribución de los <strong>organismos formadores de hábitat</strong>. MOB (mejillinar) recibe el mayor peso ',
+'por su rol como ingeniero ecosistémico; las algas laminares e incrustantes contribuyen con pesos decrecientes:</p>',
+formula(paste0("BIO = MOB + ", f(masr_factor), "·MASR + ", f(mas_factor), "·MAS + ", f(maen_factor), "·MAEN")),
+tabla(c("S_BIO", "Cobertura BIO"),
+      c(list(c(4, paste0("BIO &gt; ", f(thr_BIO[1]), "%"))),
+        lapply(2:4, function(k) c(5 - k, paste0("BIO ≥ ", f(thr_BIO[k]), "%"))),
+        list(c(0, paste0("BIO &lt; ", f(thr_BIO[4]), "%"))))),
+'<p style="font-size:12px;color:#718096;background:#fffdf0;border-left:3px solid #e6b800;padding:7px 10px;border-radius:4px;">',
+'<strong>Condición de ajuste:</strong> cuando MAS &gt; 0%, MOB &lt; ', f(MOB_threshold), '% y MASR &lt; ', f(MASR_threshold),
+'%, S_BIO se acota a un máximo de 1. Se aplica cuando la comunidad está dominada por algas oportunistas sin estructura biogénica.</p>',
+hr,
+
+sec(paste0("Compartimento TBS — turf and bare substrate · peso ", f(wT))),
+'<p>Integra dos indicadores de <strong>baja estructura biogénica</strong>, que se puntúan de forma inversa (más cobertura, menor puntaje): ',
+'el césped de macroalgas filamentosas (MAF), efímero y reversible, y el sustrato consolidado desnudo (SC), que refleja una pérdida ',
+'de estructura más persistente y por eso recibe mayor peso:</p>',
+formula(paste0("S_TBS = ", f(w_MAF), "·S_MAF + ", f(w_SC), "·S_SC")),
+'<p style="margin:10px 0 4px 0;font-size:12px;"><strong>S_MAF — Macroalgas filamentosas.</strong> MAF tiene mayor cobertura en la ',
+'estación cálida que en la fría; para que los puntajes sean comparables a lo largo del año se usan umbrales diferenciados por estación:</p>',
+tabla(c("S_MAF", "Estación cálida", "Estación fría"), filas_inv("MAF", thr_MAF_warm, thr_MAF_cold)),
+'<p style="margin:0 0 4px 0;font-size:12px;"><strong>S_SC — Sustrato desnudo consolidado.</strong> Umbrales iguales en ambas estaciones:</p>',
+tabla(c("S_SC", "Cobertura SC"), filas_inv("SC", thr_SC)),
+hr,
+
+sec("Cálculo e integración final"),
+'<p>Los puntajes de cada compartimento (0–4) se integran en un marco ponderado y se normalizan a escala 0–10:</p>',
+formula(paste0("RISI = (", f(wB), "·S_BIO + ", f(wT), "·S_TBS) / ", f(Wsum4_core), " × 10"), "#2ecc71"),
+'<p style="font-size:12px;color:#718096;margin-top:4px;">El denominador ', f(Wsum4_core), ' = (', f(wB), ' + ', f(wT),
+') × 4 es el máximo teórico (puntaje perfecto en ambos compartimentos).</p>',
+'<p style="font-size:12px;color:#718096;background:#fff5f5;border-left:3px solid #B71C1C;padding:7px 10px;border-radius:4px;margin-top:8px;">',
+'<strong>Condición de colapso estructural:</strong> cuando SC ≥ ', f(SC_collapse_thresh), '% <em>y</em> MOB &lt; ', f(MOB_collapse_thresh),
+'%, la comunidad se considera en colapso estructural y el RISI se acota a un máximo de <strong>', sprintf("%.1f", RISI_collapse_cap),
+'</strong>, independientemente del puntaje calculado.</p>', hr,
+
+sec("Clasificación ecológica"),
+'<p style="font-size:12px;color:#718096;margin-bottom:8px;">Los umbrales no son uniformes: las clases intermedias son más angostas, ',
+'porque ahí diferencias pequeñas reflejan cambios ecológicos relevantes en la estructura de la comunidad.</p>',
+'<div style="display:flex;gap:6px;flex-wrap:wrap;">', paste0(chips, collapse = ""), '</div>',
+'<p style="margin-top:14px;font-size:11px;color:#a0aec0;font-style:italic;">Bravo et al. 2026 · <em>Environmental Research</em> · ',
+'MBON Pole to Pole · IOC-UNESCO Ocean Best Practices</p></div>'))
+}
+
 mostrar_modal_risi <- function() {
   showModal(modalDialog(
     title = "Índice RISI — Rocky Intertidal Status Index",
     easyClose = TRUE, size = "l",
     footer = modalButton("Cerrar"),
-    HTML('
-<div style="font-size:13px;color:#2d3748;line-height:1.7;font-family:inherit;">
-
-<p>El <strong>RISI</strong> (Bravo et al. 2026, <em>Environmental Research</em>) es un índice multimétrico diseñado para medir el estado ecológico del intermareal rocoso a partir de fotocuadrantes del <strong>intermareal medio (MIDTIDE)</strong>. Sigue el marco conceptual del Ecosystem-Based Quality Index (EBQI, Personnic et al. 2014), integrando múltiples componentes ecológicos en una única métrica basada en su rol funcional. El índice refleja el <strong>balance entre estructura biogénica e indicadores de estado perturbado</strong> de la comunidad. Los puntajes se estiman a partir de coberturas bentónicas obtenidas mediante clasificación automática con IA (CoralNet).</p>
-
-<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
-
-<!-- BIO -->
-<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px;">Compartimento BIO — peso 25</p>
-
-<p>Representa la contribución de los <strong>organismos formadores de hábitat</strong>. Las cuatro categorías CATAMI se ponderan según su importancia ecológica y funcional relativa: MOB (lecho de mejillones) recibe el mayor peso por su rol dominante como ingeniero de ecosistema; MASR, MAS y MAEN contribuyen con pesos decrecientes que reflejan su menor rol estructural:</p>
-
-<p style="background:#f7fafc;border-left:3px solid #4a90d9;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;">
-BIO = MOB + 0.8·MASR + 0.4·MAS + 0.25·MAEN
-</p>
-
-<p style="font-size:12px;color:#718096;background:#fffdf0;border-left:3px solid #e6b800;padding:7px 10px;border-radius:4px;">
-<strong>Condición de ajuste:</strong> cuando MAS &gt; 0%, MOB &lt; 5% y MASR &lt; 10%, S_BIO se acota a 1. Esta restricción se aplica cuando la comunidad está dominada por algas oportunistas sin estructura biogénica significativa.
-</p>
-
-<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
-
-<!-- DIST -->
-<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px;">Compartimento DIST — peso 20</p>
-
-<p>Integra dos señales de <strong>reducción de la condición biogénica</strong>: la cobertura de macroalgas filamentosas (MAF), que refleja perturbación aguda y reversible, y el sustrato desnudo consolidado (SC), que refleja pérdida más persistente de estructura biogénica. El mayor peso de SC (0.6) refleja su carácter menos reversible respecto a la cobertura filamentosa efímera:</p>
-
-<p style="background:#f7fafc;border-left:3px solid #4a90d9;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;">
-S_DIST = 0.4·S_MAF + 0.6·S_SC
-</p>
-
-<p style="margin:10px 0 4px 0;font-size:12px;"><strong>S_MAF — Macroalgas filamentosas.</strong> MAF exhibió un patrón estacional significativo en la cobertura media, con valores más altos en temporada CÁLIDA que FRÍA. Para corregir esta variación fenológica, se aplicaron umbrales diferenciados por estación, de modo que los scores sean comparables a lo largo del ciclo anual:</p>
-<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
-  <tr style="background:#edf2f7;"><th style="padding:5px 8px;">S_MAF</th><th style="padding:5px 8px;">Temporada Cálida (WARM)</th><th style="padding:5px 8px;">Temporada Fría (COLD)</th></tr>
-  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>4</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 15%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 5%</td></tr>
-  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>3</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 30%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 15%</td></tr>
-  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>2</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 50%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 30%</td></tr>
-  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>1</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 70%</td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">MAF ≤ 60%</td></tr>
-  <tr><td style="padding:4px 8px;text-align:center;"><strong>0</strong></td><td style="padding:4px 8px;">MAF &gt; 70%</td><td style="padding:4px 8px;">MAF &gt; 60%</td></tr>
-</table>
-
-<p style="margin:0 0 4px 0;font-size:12px;"><strong>S_SC — Sustrato desnudo consolidado.</strong> Refleja pérdida persistente de estructura biogénica; umbrales iguales para ambas temporadas:</p>
-<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">
-  <tr style="background:#edf2f7;"><th style="padding:5px 8px;">S_SC</th><th style="padding:5px 8px;">Condición (SC)</th></tr>
-  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>4</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 5%</td></tr>
-  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>3</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 15%</td></tr>
-  <tr><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>2</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 30%</td></tr>
-  <tr style="background:#f7fafc;"><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;text-align:center;"><strong>1</strong></td><td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;">SC ≤ 60%</td></tr>
-  <tr><td style="padding:4px 8px;text-align:center;"><strong>0</strong></td><td style="padding:4px 8px;">SC &gt; 60%</td></tr>
-</table>
-
-<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
-
-<!-- Fórmula final -->
-<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px;">Cálculo e integración final</p>
-<p>Los puntajes de cada compartimento (0–4) se integran en un marco ponderado y normalizado a escala 0–10. Los pesos reflejan la importancia ecológica relativa de cada compartimento, con BIO como factor de mayor influencia:</p>
-<p style="background:#f7fafc;border-left:3px solid #2ecc71;padding:8px 12px;border-radius:4px;font-family:monospace;font-size:12px;">
-RISI = (25·S_BIO + 20·S_DIST) / 180 × 10
-</p>
-<p style="font-size:12px;color:#718096;margin-top:4px;">El denominador 180 = (25 + 20) × 4 es el máximo teórico posible (score perfecto en ambos compartimentos).</p>
-
-<p style="font-size:12px;color:#718096;background:#fff5f5;border-left:3px solid #B71C1C;padding:7px 10px;border-radius:4px;margin-top:8px;">
-<strong>Condición de colapso estructural:</strong> cuando SC ≥ 85% <em>y</em> MOB &lt; 10%, la comunidad se considera en colapso estructural. En este caso, el RISI se acota a un máximo de <strong>2.0</strong>, independientemente del puntaje calculado.
-</p>
-
-<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">
-
-<!-- Clasificación -->
-<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px;">Clasificación ecológica</p>
-<p style="font-size:12px;color:#718096;margin-bottom:8px;">Los umbrales son no uniformes para aumentar la sensibilidad en condiciones intermedias, donde diferencias pequeñas pueden reflejar cambios ecológicos significativos en la estructura de la comunidad:</p>
-<div style="display:flex;gap:6px;flex-wrap:wrap;">
-  <span style="background:#3B7EA1;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">High 7.5–10.0</span>
-  <span style="background:#66C2A5;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Good 6.0–7.49</span>
-  <span style="background:#c9a800;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Moderate 4.5–5.99</span>
-  <span style="background:#FB8C00;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Poor 3.5–4.49</span>
-  <span style="background:#B71C1C;color:white;padding:4px 10px;border-radius:12px;font-size:11px;font-weight:700;">Bad 0.0–3.49</span>
-</div>
-
-<p style="margin-top:14px;font-size:11px;color:#a0aec0;font-style:italic;">Bravo et al. 2026 · <em>Environmental Research</em> · MBON Pole to Pole · IOC-UNESCO Ocean Best Practices</p>
-</div>
-    ')
+    contenido_modal_risi()
   ))
 }
 
 observeEvent(input$show_risi_modal,      { mostrar_modal_risi() })
 observeEvent(input$show_risi_modal_side, { mostrar_modal_risi() })
+observeEvent(input$show_risi_modal_heat, { mostrar_modal_risi() })
 
 # ── Fotocuadrantes: filtros 100% propios de la pestaña ───────
 # Ninguno depende de Resultados: las dos pestañas son independientes.
@@ -1035,8 +1076,10 @@ tags$div(class="scroll-content",
 
   # ── Heatmap RISI localidad/sitio × año ──────────────────────
   tags$div(class="chart-block",
-    tags$p(class="section-title",
-      uiOutput("heatmap_risi_title", inline = TRUE)
+    tags$div(style="display:flex;align-items:center;gap:8px;margin-bottom:4px;",
+      tags$p(class="section-title",style="margin:0;",
+        uiOutput("heatmap_risi_title", inline = TRUE)),
+      boton_info("show_risi_modal_heat")
     ),
     tags$p(class="section-desc",
       uiOutput("heatmap_risi_desc", inline = TRUE)
@@ -1049,13 +1092,7 @@ tags$div(class="scroll-content",
   tags$div(class="chart-block",
     tags$div(style="display:flex;align-items:center;gap:8px;margin-bottom:4px;",
       tags$p(class="section-title",style="margin:0;","Distribución de clases RISI (MIDTIDE)"),
-      actionLink("show_risi_modal",
-        tags$span(style="
-          display:inline-flex;align-items:center;justify-content:center;
-          width:16px;height:16px;border-radius:50%;
-          background:#e8ecf0;color:#5d7a96;font-size:10px;font-weight:700;
-          cursor:pointer;border:1px solid #c8d6e0;line-height:1;", "?")
-      )
+      boton_info("show_risi_modal")
     ),
     tags$p(class="section-desc",
       "Porcentaje de fotocuadrantes del intermareal medio en cada clase de estado, por localidad (norte a sur). El total de fotocuadrantes figura a la derecha de cada barra."),
