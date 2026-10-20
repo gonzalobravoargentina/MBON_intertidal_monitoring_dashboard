@@ -399,6 +399,10 @@ class_cols  <- c("Bad"="#B71C1C","Poor"="#FB8C00","Moderate"="#c9a800","Good"="#
 # Leyenda en HTML, construida a partir del MISMO vector de colores que usa el
 # gráfico. Va en el texto de la tarjeta (no dentro de plotly), así se acomoda
 # sola al ancho de la ventana y nunca se encima con los ejes.
+# Estaciones: mismo color y forma que la Figura 4 del paper
+estacion_cols   <- c("Cálida" = "#E8522A", "Fría" = "#3B7EA1")
+estacion_shapes <- c("Cálida" = 16, "Fría" = 15)
+
 # Botón "?" que abre un modal (mismo aspecto en todas las tarjetas)
 boton_info <- function(id)
   actionLink(id, tags$span(class = "info-btn", "?"))
@@ -1172,15 +1176,14 @@ tags$div(class="scroll-content",
     )
   ),
 
-  # ── MOB trend (visible only when all years selected) ────────
+  # ── Bivalvos por localidad/sitio (sólo con todos los años) ──
   conditionalPanel(
     condition = "input.sel_year === 'ALL'",
     tags$div(class="chart-block",
-      tags$p(class="section-title","Tendencia de cobertura de bivalvos (MOB)"),
-      tags$p(class="section-desc",
-        "Evolución temporal de la cobertura media (%) de bivalvos (MOB) en el intermareal medio (MIDTIDE) por localidad. Permite detectar tendencias de largo plazo. Visible cuando se seleccionan todos los años."
-      ),
-      plotlyOutput("trend_mob", height="360px")
+      tags$p(class="section-title","Cobertura de bivalvos (MOB) por localidad"),
+      tags$p(class="section-desc", uiOutput("mob_desc", inline = TRUE)),
+      leyenda_html(estacion_cols),
+      uiOutput("mob_ui")
     )
   ),
 
@@ -1300,55 +1303,87 @@ output$btn_coralnet <- renderUI({
   }
 })
 
-output$trend_mob <- renderPlotly({
+# Cobertura media de MOB en el intermareal medio por campaña (año x estación),
+# un panel por localidad (o por sitio si hay una localidad filtrada).
+mob_periodo <- reactive({
   req(is.null(input$sel_year) || input$sel_year == "ALL")
-  df <- AMP_filtrado()
-  req(nrow(df) > 0, "MOB" %in% names(df))
+  df <- AMP_filtrado(); req(nrow(df) > 0, "MOB" %in% names(df))
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+  g_var   <- if (by_site) "site" else "locality"
 
-  df_mob <- df %>%
-    filter(strata == "MIDTIDE", !is.na(MOB), !is.na(year)) %>%   # MIDTIDE only
-    mutate(MOB = as.numeric(MOB)) %>%
-    group_by(locality, year) %>%
-    summarise(
-      MOB_mean = mean(MOB, na.rm = TRUE),
-      n        = n(),
-      .groups  = "drop"
+  d <- df %>%
+    filter(strata == "MIDTIDE", !is.na(year), !is.na(estacion)) %>%
+    mutate(MOB = as.numeric(coalesce(as.numeric(MOB), 0)))
+  req(nrow(d) > 0)
+
+  lat <- d %>% group_by(across(all_of(g_var))) %>%
+    summarise(lat = mean(as.numeric(Latitude), na.rm = TRUE), .groups = "drop")
+
+  d %>%
+    group_by(across(all_of(c(g_var, "year", "estacion")))) %>%
+    summarise(MOB = mean(MOB, na.rm = TRUE), n = n(), .groups = "drop") %>%
+    left_join(lat, by = g_var) %>%
+    mutate(
+      nombre  = as.character(.data[[g_var]]),
+      panel   = if (by_site) str_to_title(nombre) else nombre_localidad(nombre),
+      # cálida (dic–may) abre el año y fría (jun–nov) lo cierra
+      x       = year + if_else(estacion == "Fría", 0.5, 0),
+      estacion = factor(estacion, levels = names(estacion_cols))
     ) %>%
-    mutate(sigla = ifelse(locality %in% names(siglas_localidades),
-                          siglas_localidades[locality], locality))
-  req(nrow(df_mob) > 0)
+    arrange(panel, x) %>%
+    group_by(panel) %>%
+    # cortar la línea donde falta una campaña (salto mayor a medio año)
+    mutate(seg = cumsum(c(1, diff(x) > 0.51))) %>%
+    ungroup()
+})
 
-  # Dynamic palette: enough colors for any number of localities
-  n_loc  <- n_distinct(df_mob$locality)
-  pal_mob <- colorRampPalette(c(
-    "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
-    "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
-    "#aec7e8","#ffbb78","#98df8a","#ff9896","#c5b0d5"
-  ))(n_loc)
+output$mob_desc <- renderUI({
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+  quien <- if (by_site) paste0("cada sitio de ", nombre_localidad(input$sel_localidad)) else "cada localidad, de norte a sur"
+  paste0("Cobertura media (%) de bivalvos en el intermareal medio, un punto por campaña, en ", quien,
+         ". Todos los paneles comparten la escala 0–100%. Visible cuando se seleccionan todos los años.")
+})
 
-  p <- ggplot(df_mob,
-    aes(x = year, y = MOB_mean, color = locality, group = locality,
-        text = paste0("Localidad: ", locality,
-                      "<br>Año: ", year,
-                      "<br>MOB medio (MIDTIDE): ", round(MOB_mean, 1), "%",
-                      "<br>N fotos: ", n))) +
-    geom_line(linewidth = 0.8, alpha = 0.6) +
-    geom_point(size = 1.8, alpha = 0.75) +
-    scale_x_continuous(breaks = sort(unique(df_mob$year))) +
-    scale_color_manual(values = pal_mob, name = "Localidad") +
-    labs(x = "Año", y = "Cobertura media MOB (%)") +
-    theme_minimal(base_size = 10) +
-    theme(
-      legend.position  = "right",
-      panel.grid.minor = element_blank(),
-      axis.text.x      = element_text(angle = 45, hjust = 1)
-    )
+output$mob_ui <- renderUI({
+  n <- n_distinct(mob_periodo()$panel)
+  plotlyOutput("trend_mob", height = paste0(ceiling(n / 4) * 118 + 50, "px"))
+})
+
+output$trend_mob <- renderPlotly({
+  d <- mob_periodo(); req(nrow(d) > 0)
+  orden <- d %>% distinct(panel, lat) %>% arrange(desc(lat)) %>% pull(panel)
+  d <- d %>% mutate(panel = factor(panel, levels = unique(orden)),
+                    grp   = paste(panel, seg))
+  anios <- sort(unique(d$year))
+
+  p <- ggplot(d, aes(x = x, y = MOB)) +
+    geom_ribbon(aes(ymin = 0, ymax = MOB, group = grp), fill = "#5f5e5a", alpha = 0.08) +
+    geom_line(aes(group = grp), colour = "#5f5e5a", linewidth = 0.6) +
+    geom_point(aes(colour = estacion, shape = estacion,
+                   text = paste0(panel, "<br>", estacion, " ", year,
+                                 "<br>MOB: ", round(MOB, 1), "%",
+                                 "<br>Fotocuadrantes: ", n)),
+               size = 2) +
+    facet_wrap(~ panel, ncol = 4) +
+    scale_colour_manual(values = estacion_cols, drop = FALSE) +
+    scale_shape_manual(values = estacion_shapes, drop = FALSE) +
+    scale_x_continuous(breaks = anios, labels = anios,
+                       limits = c(min(anios) - 0.2, max(anios) + 0.7)) +
+    scale_y_continuous(limits = c(0, 100), breaks = c(0, 50, 100)) +
+    labs(x = NULL, y = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(legend.position  = "none",
+          strip.text       = element_text(face = "bold", size = 9, hjust = 0),
+          panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank(),
+          axis.text        = element_text(size = 7.5),
+          panel.spacing    = unit(0.7, "lines"))
 
   ggplotly(p, tooltip = "text") %>%
-    layout(legend = list(font = list(size = 9)),
-           margin = list(t = 10, r = 120)) %>%
+    layout(showlegend = FALSE, margin = list(t = 25, r = 10, b = 20, l = 30)) %>%
     config(displayModeBar = FALSE)
 })
+
 
 output$barras_indice_clases <- renderPlotly({
   dfc <- conteo_indice_clases(); req(nrow(dfc)>0)
