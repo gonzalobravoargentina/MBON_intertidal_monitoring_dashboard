@@ -399,8 +399,10 @@ class_cols  <- c("Bad"="#B71C1C","Poor"="#FB8C00","Moderate"="#c9a800","Good"="#
 # Leyenda en HTML, construida a partir del MISMO vector de colores que usa el
 # gráfico. Va en el texto de la tarjeta (no dentro de plotly), así se acomoda
 # sola al ancho de la ventana y nunca se encima con los ejes.
-# Estaciones: mismo color y forma que la Figura 4 del paper
-estacion_cols   <- c("Cálida" = "#E8522A", "Fría" = "#3B7EA1")
+# Estaciones. Colores elegidos FUERA de la gama del RISI (rojo, naranja,
+# mostaza, verde agua, azul) para que una estación nunca se lea como un estado
+# ecológico. Las formas (círculo / cuadrado) las distinguen sin color.
+estacion_cols   <- c("Cálida" = "#C51B7D", "Fría" = "#5E3C99")
 estacion_shapes <- c("Cálida" = 16, "Fría" = 15)
 
 # Botón "?" que abre un modal (mismo aspecto en todas las tarjetas)
@@ -1418,7 +1420,7 @@ output$plot_anio_estacion <- renderPlotly({
   df <- fotos_por_anio_estacion(); req(nrow(df)>0)
   p <- ggplot(df,aes(x=factor(year),y=n_fotos,fill=estacion)) +
     geom_col(position="dodge",width=0.65) +
-    scale_fill_manual(values=c("Cálida"="#E8522A","Fría"="#3B7EA1"),name="Estación") +
+    scale_fill_manual(values=estacion_cols,name="Estación") +
     labs(x="Año",y="Fotocuadrantes") +
     theme_minimal(base_size=10) +
     theme(legend.position="top",panel.grid.major.x=element_blank())
@@ -1706,7 +1708,7 @@ output$plot_esfuerzo_fc <- renderPlotly({
     # el ancho de una barra individual en vez de estirarse a ocupar las dos.
     geom_col(width = 0.65,
              position = position_dodge(width = 0.65, preserve = "single")) +
-    scale_fill_manual(values=c("Cálida"="#E8522A","Fría"="#3B7EA1"),name="Estación") +
+    scale_fill_manual(values=estacion_cols,name="Estación") +
     labs(x="Año",y="Fotocuadrantes") +
     theme_minimal(base_size=10) +
     theme(legend.position="top",panel.grid.major.x=element_blank())
