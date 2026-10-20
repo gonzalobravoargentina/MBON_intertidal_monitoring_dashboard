@@ -65,6 +65,9 @@ select option { background-color: #1b2a3b; }
 .chart-block { background: white; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.07); padding: 12px 14px 10px 14px; }
 .section-title { font-size: 13px; font-weight: 700; color: #1b2a3b; border-left: 3px solid #2ecc71; padding-left: 8px; margin: 0 0 4px 0; }
 .section-desc { font-size: 11px; color: #7f8c8d; margin-bottom: 8px; line-height: 1.4; }
+.leyenda-chips { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 8px 0; }
+.leyenda-chips .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #4a5a6a; white-space: nowrap; }
+.leyenda-chips .chip i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
 .seg-toggle .form-group { margin: 0; }
 .seg-toggle .shiny-options-group { display: inline-flex; border: 1px solid #c8d6e0; border-radius: 6px; overflow: hidden; }
 .seg-toggle .radio-inline { margin: 0 !important; padding: 0 !important; }
@@ -359,6 +362,16 @@ SC_collapse_thresh<-85; MOB_collapse_thresh<-10; RISI_collapse_cap<-2.0
 RISI_levels <- c("High","Good","Moderate","Poor","Bad")
 class_cols  <- c("Bad"="#B71C1C","Poor"="#FB8C00","Moderate"="#c9a800","Good"="#66C2A5","High"="#3B7EA1")
 
+# Leyenda en HTML, construida a partir del MISMO vector de colores que usa el
+# gráfico. Va en el texto de la tarjeta (no dentro de plotly), así se acomoda
+# sola al ancho de la ventana y nunca se encima con los ejes.
+leyenda_html <- function(cols) {
+  tags$div(class = "leyenda-chips",
+    lapply(names(cols), function(n)
+      tags$span(class = "chip",
+        tags$i(style = paste0("background:", cols[[n]], ";")), n)))
+}
+
 S_bio_fun <- function(bio)
   case_when(is.na(bio)~NA_real_, bio>50~4, bio>=25~3, bio>=10~2, bio>=1~1, TRUE~0)
 S_inv_SC <- function(x)
@@ -549,7 +562,7 @@ cobertura_estrato <- reactive({
       clase  = if (grp) clase else recode(clase, !!!catami_dicc),
       clase  = factor(clase, levels = niveles),
       strata = factor(strata, levels = c("HIGHTIDE","MIDTIDE","LOWTIDE"),
-                      labels = c("Intermareal alto","Intermareal medio","Intermareal bajo"))
+                      labels = c("Alto","Medio","Bajo"))
     )
 })
 
@@ -992,6 +1005,7 @@ tags$div(class="scroll-content",
                      selected = "cat"))
     ),
     tags$p(class="section-desc", uiOutput("cobertura_desc", inline = TRUE)),
+    uiOutput("cobertura_leyenda"),
     uiOutput("cobertura_ui")
   ),
 
@@ -1027,6 +1041,7 @@ tags$div(class="scroll-content",
     tags$p(class="section-desc",
       uiOutput("heatmap_risi_desc", inline = TRUE)
     ),
+    leyenda_html(class_cols[RISI_levels]),
     plotlyOutput("heatmap_risi", height = "300px")
   ),
 
@@ -1044,30 +1059,47 @@ tags$div(class="scroll-content",
     ),
     tags$p(class="section-desc",
       "Porcentaje de fotocuadrantes del intermareal medio en cada clase de estado, por localidad (norte a sur). El total de fotocuadrantes figura a la derecha de cada barra."),
+    leyenda_html(class_cols[RISI_levels]),
     uiOutput("btn_coralnet"),
-    plotlyOutput("barras_indice_clases",height="400px")
+    plotlyOutput("barras_indice_clases",height="380px")
   ),
 
 )
 ```
 
 ```{r right_servers, include=FALSE}
+# Colores de la cobertura: una sola fuente para el gráfico y su leyenda.
+cobertura_cols <- reactive({
+  d <- cobertura_estrato()
+  lv <- levels(droplevels(d$clase))
+  if (identical(input$nivel_cobertura, "grp")) {
+    cols <- c("Invertebrados" = "#3498db", "Algas" = "#2ecc71", "Suelo desnudo" = "#95a5a6")[lv]
+  } else {
+    cols <- colores_catami_fixed[lv]; falt <- is.na(cols)
+    if (any(falt)) cols[falt] <- brewer.pal(max(3, sum(falt)), "Paired")[seq_len(sum(falt))]
+    names(cols) <- lv
+  }
+  cols
+})
+
+output$cobertura_leyenda <- renderUI(leyenda_html(cobertura_cols()))
+
 output$cobertura_desc <- renderUI({
   est <- input$sel_estacion
   est_txt <- if (is.null(est) || est == "ALL") "cálida y fría promediadas" else paste("estación", tolower(est))
   if (identical(input$nivel_cobertura, "grp"))
     HTML(paste0("Algas (MAEN + MAEC + MAA + MAS + MASR + MAF + MAG + MALCB), Invertebrados (MOB + CRB + MOG) ",
-                "y Suelo desnudo (SC). Cobertura media (%), ", est_txt,
+                "y Suelo desnudo (SC). Cobertura media (%) en el intermareal alto, medio y bajo, ", est_txt,
                 ". Para separar estaciones usá el filtro <b>Estación</b>."))
   else
-    HTML(paste0("Cobertura media (%) de cada categoría CATAMI, ", est_txt,
+    HTML(paste0("Cobertura media (%) de cada categoría CATAMI en el intermareal alto, medio y bajo, ", est_txt,
                 ". Localidades de norte a sur. Para separar estaciones usá el filtro <b>Estación</b>."))
 })
 
 # Alto del gráfico según la cantidad de filas (14 localidades o pocos sitios)
 output$cobertura_ui <- renderUI({
   n <- n_distinct(cobertura_estrato()$eje_y)
-  plotlyOutput("barras_cobertura", height = paste0(max(300, 24 * n + 230), "px"))
+  plotlyOutput("barras_cobertura", height = paste0(max(220, 24 * n + 90), "px"))
 })
 
 output$barras_cobertura <- renderPlotly({
@@ -1080,38 +1112,28 @@ output$barras_cobertura <- renderPlotly({
   orden_y <- d %>% distinct(etiq_y, lat) %>% arrange(lat) %>% pull(etiq_y)
   d <- d %>% mutate(etiq_y = factor(etiq_y, levels = unique(orden_y)))
 
-  if (grp) {
-    cols <- c("Invertebrados" = "#3498db", "Algas" = "#2ecc71", "Suelo desnudo" = "#95a5a6")
-    nombre_leyenda <- "Grupo funcional"
-  } else {
-    lv   <- levels(d$clase)
-    cols <- colores_catami_fixed[lv]; falt <- is.na(cols)
-    if (any(falt)) cols[falt] <- brewer.pal(max(3, sum(falt)), "Paired")[seq_len(sum(falt))]
-    names(cols) <- lv
-    nombre_leyenda <- "CATAMI"
-  }
+  cols <- cobertura_cols()
 
   p <- ggplot(d, aes(x = Cobertura, y = etiq_y, fill = clase,
-        text = paste0(y_label, ": ", etiq_y, "<br>", strata,
+        text = paste0(y_label, ": ", etiq_y, "<br>Intermareal ", tolower(strata),
                       "<br>", clase, ": ", round(Cobertura, 1), "%"))) +
     geom_col(position = position_stack(reverse = TRUE), width = 0.8) +
     facet_wrap(~ strata, nrow = 1, drop = FALSE) +
-    scale_fill_manual(values = cols, name = nombre_leyenda, drop = TRUE) +
-    scale_x_continuous(limits = c(0, 100.5), breaks = c(0, 50, 100),
-                       labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
-    labs(x = "Cobertura media", y = NULL) +
+    scale_fill_manual(values = cols, drop = TRUE) +
+    # sin "%" en los ticks: así "100" y "0" de paneles vecinos no se pegan
+    scale_x_continuous(limits = c(0, 100.5), breaks = c(0, 50, 100), expand = c(0, 0)) +
+    labs(x = NULL, y = NULL) +
     theme_minimal(base_size = 10) +
     theme(axis.text.y      = element_text(size = 9, colour = "#333333"),
           axis.text.x      = element_text(size = 8),
           strip.text       = element_text(face = "bold", size = 9.5),
           panel.grid.major.y = element_blank(),
           panel.grid.minor   = element_blank(),
-          panel.spacing.x    = unit(0.8, "lines"))
+          panel.spacing.x    = unit(1.4, "lines"),
+          legend.position    = "none")
 
   ggplotly(p, tooltip = "text") %>%
-    layout(legend = list(orientation = "h", xanchor = "center", x = 0.5, y = -0.1,
-                         yanchor = "top", font = list(size = 9.5)),
-           margin = list(l = 10, r = 10, t = 25, b = 90)) %>%
+    layout(showlegend = FALSE, margin = list(l = 10, r = 10, t = 25, b = 25)) %>%
     config(displayModeBar = FALSE)
 })
 
@@ -1202,11 +1224,11 @@ output$barras_indice_clases <- renderPlotly({
     scale_fill_manual(values=class_cols,drop=FALSE,breaks=rev(RISI_levels)) +
     labs(x=NULL,y="Fotocuadrantes del intermareal medio (%)",fill="Clase RISI") +
     theme_minimal(base_size=10) +
-    theme(legend.position="top",legend.title=element_text(face="bold",size=9),
+    theme(legend.position="none",
           axis.text.y=element_text(size=9,colour="#333333"),
           panel.grid.major.y=element_blank(),panel.grid.minor=element_blank())
   ggplotly(p,tooltip="text") %>%
-    layout(legend=list(orientation="h",x=0,y=1.08,traceorder="normal")) %>%
+    layout(showlegend=FALSE, margin=list(t=5,r=10)) %>%
     config(displayModeBar = FALSE)
 })
 
@@ -1289,13 +1311,11 @@ output$heatmap_risi <- renderPlotly({
       axis.text.x     = element_text(angle = 45, hjust = 1, size = 9),
       axis.text.y     = element_text(size = 9),
       panel.grid      = element_blank(),
-      legend.key.height = unit(0.6, "cm"),
-      legend.key.width  = unit(0.25, "cm"),
-      legend.text       = element_text(size = 8)
+      legend.position = "none"
     )
 
   ggplotly(p, tooltip = "text") %>%
-    layout(margin = list(t = 5, r = 10, b = 40)) %>%
+    layout(showlegend = FALSE, margin = list(t = 5, r = 10, b = 40)) %>%
     config(displayModeBar = FALSE)
 })
 
