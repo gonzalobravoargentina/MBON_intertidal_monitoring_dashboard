@@ -695,105 +695,67 @@ observeEvent(input$show_catami_modal, {
 
 # ── Modal "info sobre RISI" ───────────────────────────────────
 # Definición ÚNICA: lo abren el enlace "+ info sobre RISI" de la barra lateral
-# y los "?" de "RISI por localidad y año" y "Distribución de clases RISI".
-# Todo número, umbral y color se lee de los parámetros del chunk risi_params,
-# así que el texto no puede quedar desfasado del cálculo.
-contenido_modal_risi <- function() {
-  f   <- function(x) format(x, trim = TRUE, drop0trailing = TRUE, nsmall = 0)
-  sec <- function(t) paste0('<p style="font-size:12px;font-weight:700;color:#5d7a96;text-transform:uppercase;',
-                            'letter-spacing:0.7px;margin-bottom:6px;">', t, '</p>')
-  formula <- function(t, col = "#4a90d9")
-    paste0('<p style="background:#f7fafc;border-left:3px solid ', col, ';padding:8px 12px;',
-           'border-radius:4px;font-family:monospace;font-size:12px;">', t, '</p>')
-  hr  <- '<hr style="border:none;border-top:1px solid #e2e8f0;margin:14px 0;">'
-  td  <- function(x, center = FALSE)
-    paste0('<td style="padding:4px 8px;border-bottom:1px solid #e2e8f0;',
-           if (center) 'text-align:center;font-weight:700;' else '', '">', x, '</td>')
-  tabla <- function(cab, filas) {
-    h <- paste0('<tr style="background:#edf2f7;">',
-                paste0('<th style="padding:5px 8px;text-align:left;">', cab, '</th>', collapse = ""), '</tr>')
-    b <- vapply(seq_along(filas), function(i)
-      paste0('<tr', if (i %% 2 == 0) ' style="background:#f7fafc;"' else '', '>',
-             td(filas[[i]][1], TRUE), paste0(vapply(filas[[i]][-1], td, ""), collapse = ""), '</tr>'), "")
-    paste0('<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;">',
-           h, paste0(b, collapse = ""), '</table>')
-  }
-  # filas de un puntaje inverso (<= umbral)
-  filas_inv <- function(var, ...) {
-    ts <- list(...)
-    c(lapply(1:4, function(k) c(5 - k, vapply(ts, function(t) paste0(var, " ≤ ", f(t[k]), "%"), ""))),
-      list(c(0, vapply(ts, function(t) paste0(var, " &gt; ", f(t[4]), "%"), ""))))
-  }
-  wB <- W_core[["BIO"]]; wT <- W_core[["TBS"]]
+# y los "?" de los títulos. Versión divulgativa: dos figuras y una explicación
+# breve; el detalle metodológico queda en el paper y en el código.
+# Los chips de clase se leen de risi_breaks y class_cols (no pueden desfasarse).
+output$risi_img1 <- renderImage(
+  list(src = "RISI_1_web.jpg", contentType = "image/jpeg",
+       style = "width:100%;height:auto;border-radius:6px;"),
+  deleteFile = FALSE
+)
+output$risi_img2 <- renderImage(
+  list(src = "RISI_2_web.jpg", contentType = "image/jpeg",
+       style = "width:100%;max-width:760px;height:auto;display:block;margin:0 auto;"),
+  deleteFile = FALSE
+)
 
+contenido_modal_risi <- function() {
   # chips de clase, con los mismos colores y cortes que usa el índice
   rb <- risi_breaks
   lo <- c(High = rb[["High"]], Good = rb[["Good"]], Moderate = rb[["Moderate"]],
           Poor = rb[["Poor"]], Bad = 0)
   hi <- c(High = 10, Good = rb[["High"]], Moderate = rb[["Good"]],
           Poor = rb[["Moderate"]], Bad = rb[["Poor"]])   # límite superior de cada clase
-  chips <- vapply(RISI_levels, function(cl) {
-    rng <- if (cl == "High") paste0(sprintf("%.1f", lo[[cl]]), "–10.0")
-           else paste0(sprintf("%.1f", lo[[cl]]), "–", sprintf("%.2f", hi[[cl]] - 0.01))
-    paste0('<span style="background:', class_cols[[cl]], ';color:white;padding:4px 10px;',
-           'border-radius:12px;font-size:11px;font-weight:700;">', cl, ' ', rng, '</span>')
-  }, "")
+  chips <- lapply(RISI_levels, function(cl) {
+    rng <- if (cl == "High") paste0(sprintf("%.1f", lo[[cl]]), "–10")
+           else paste0(sprintf("%.1f", lo[[cl]]), "–", sprintf("%.1f", hi[[cl]]))
+    tags$span(style = paste0("background:", class_cols[[cl]], ";color:white;padding:4px 10px;",
+                             "border-radius:12px;font-size:11px;font-weight:700;"),
+              paste(cl, rng))
+  })
+  cap <- function(t) tags$p(style = "font-size:11.5px;color:#718096;font-style:italic;margin:4px 0 14px 0;", t)
 
-  HTML(paste0(
-'<div style="font-size:13px;color:#2d3748;line-height:1.7;font-family:inherit;">',
-'<p>El <strong>RISI</strong> (Bravo et al. 2026, <em>Environmental Research</em>) es un índice multimétrico ',
-'que mide el estado ecológico del intermareal rocoso a partir de fotocuadrantes del <strong>intermareal medio (MIDTIDE)</strong>. ',
-'Sigue el marco conceptual del Ecosystem-Based Quality Index (EBQI, Personnic et al. 2014) y refleja el ',
-'<strong>balance entre la estructura biogénica y la cobertura de césped algal y sustrato desnudo</strong>. ',
-'Las coberturas se obtienen por clasificación automática con IA (CoralNet). El índice se calcula para cada ',
-'fotocuadrante y luego se promedia.</p>', hr,
-
-sec(paste0("Compartimento BIO — estructura biogénica · peso ", f(wB))),
-'<p>Contribución de los <strong>organismos formadores de hábitat</strong>. MOB (mejillinar) recibe el mayor peso ',
-'por su rol como ingeniero ecosistémico; las algas laminares e incrustantes contribuyen con pesos decrecientes:</p>',
-formula(paste0("BIO = MOB + ", f(masr_factor), "·MASR + ", f(mas_factor), "·MAS + ", f(maen_factor), "·MAEN")),
-tabla(c("S_BIO", "Cobertura BIO"),
-      c(list(c(4, paste0("BIO &gt; ", f(thr_BIO[1]), "%"))),
-        lapply(2:4, function(k) c(5 - k, paste0("BIO ≥ ", f(thr_BIO[k]), "%"))),
-        list(c(0, paste0("BIO &lt; ", f(thr_BIO[4]), "%"))))),
-'<p style="font-size:12px;color:#718096;background:#fffdf0;border-left:3px solid #e6b800;padding:7px 10px;border-radius:4px;">',
-'<strong>Condición de ajuste:</strong> cuando MAS &gt; 0%, MOB &lt; ', f(MOB_threshold), '% y MASR &lt; ', f(MASR_threshold),
-'%, S_BIO se acota a un máximo de 1. Se aplica cuando la comunidad está dominada por algas oportunistas sin estructura biogénica.</p>',
-hr,
-
-sec(paste0("Compartimento TBS — turf and bare substrate · peso ", f(wT))),
-'<p>Integra dos indicadores de <strong>baja estructura biogénica</strong>, que se puntúan de forma inversa (más cobertura, menor puntaje): ',
-'el césped de macroalgas filamentosas (MAF), efímero y reversible, y el sustrato consolidado desnudo (SC), que refleja una pérdida ',
-'de estructura más persistente y por eso recibe mayor peso:</p>',
-formula(paste0("S_TBS = ", f(w_MAF), "·S_MAF + ", f(w_SC), "·S_SC")),
-'<p style="margin:10px 0 4px 0;font-size:12px;"><strong>S_MAF — Macroalgas filamentosas.</strong> MAF tiene mayor cobertura en la ',
-'estación cálida que en la fría; para que los puntajes sean comparables a lo largo del año se usan umbrales diferenciados por estación:</p>',
-tabla(c("S_MAF", "Estación cálida", "Estación fría"), filas_inv("MAF", thr_MAF_warm, thr_MAF_cold)),
-'<p style="margin:0 0 4px 0;font-size:12px;"><strong>S_SC — Sustrato desnudo consolidado.</strong> Umbrales iguales en ambas estaciones:</p>',
-tabla(c("S_SC", "Cobertura SC"), filas_inv("SC", thr_SC)),
-hr,
-
-sec("Cálculo e integración final"),
-'<p>Los puntajes de cada compartimento (0–4) se integran en un marco ponderado y se normalizan a escala 0–10:</p>',
-formula(paste0("RISI = (", f(wB), "·S_BIO + ", f(wT), "·S_TBS) / ", f(Wsum4_core), " × 10"), "#2ecc71"),
-'<p style="font-size:12px;color:#718096;margin-top:4px;">El denominador ', f(Wsum4_core), ' = (', f(wB), ' + ', f(wT),
-') × 4 es el máximo teórico (puntaje perfecto en ambos compartimentos).</p>',
-'<p style="font-size:12px;color:#718096;background:#fff5f5;border-left:3px solid #B71C1C;padding:7px 10px;border-radius:4px;margin-top:8px;">',
-'<strong>Condición de colapso estructural:</strong> cuando SC ≥ ', f(SC_collapse_thresh), '% <em>y</em> MOB &lt; ', f(MOB_collapse_thresh),
-'%, la comunidad se considera en colapso estructural y el RISI se acota a un máximo de <strong>', sprintf("%.1f", RISI_collapse_cap),
-'</strong>, independientemente del puntaje calculado.</p>', hr,
-
-sec("Clasificación ecológica"),
-'<p style="font-size:12px;color:#718096;margin-bottom:8px;">Los umbrales no son uniformes: las clases intermedias son más angostas, ',
-'porque ahí diferencias pequeñas reflejan cambios ecológicos relevantes en la estructura de la comunidad.</p>',
-'<div style="display:flex;gap:6px;flex-wrap:wrap;">', paste0(chips, collapse = ""), '</div>',
-'<p style="margin-top:14px;font-size:11px;color:#a0aec0;font-style:italic;">Bravo et al. 2026 · <em>Environmental Research</em> · ',
-'MBON Pole to Pole · IOC-UNESCO Ocean Best Practices</p></div>'))
+  tags$div(style = "font-size:13.5px;color:#2d3748;line-height:1.65;",
+    tags$p(HTML(paste0(
+      "El <strong>RISI</strong> (<em>Rocky Intertidal Status Index</em>) resume en una escala de ",
+      "<strong>0 a 10</strong> el estado del intermareal rocoso medio, a partir de lo que cubre la roca en cada fotocuadrante. ",
+      "Valores altos indican una comunidad dominada por <strong>estructura biogénica</strong> (mejillinares, algas laminares); ",
+      "valores bajos, <strong>roca desnuda o césped de algas filamentosas</strong>."))),
+    imageOutput("risi_img1", height = "auto"),
+    cap("Fotocuadrantes reales ordenados de menor a mayor RISI, con sus coberturas principales."),
+    tags$p(HTML(paste0(
+      "<strong>¿Cómo se calcula?</strong> Combina dos componentes: lo que <strong>suma</strong> ",
+      "(organismos que forman hábitat: mejillines y algas laminares) y lo que <strong>resta</strong> ",
+      "(sustrato desnudo y algas filamentosas). El índice se calcula para cada fotocuadrante y luego se promedia ",
+      "por sitio, localidad y campaña."))),
+    imageOutput("risi_img2", height = "auto"),
+    cap("Cobertura media de cada grupo a lo largo del gradiente de RISI: el mejillinar (MOB) crece hacia los valores altos; el sustrato desnudo (SC) domina en los bajos."),
+    tags$p(style = "margin-bottom:6px;", tags$strong("Clases de estado")),
+    tags$div(style = "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;", chips),
+    tags$p(style = "font-size:12px;color:#4a5568;background:#f7fafc;border-left:3px solid #4a90d9;padding:8px 12px;border-radius:4px;",
+      HTML(paste0(
+        "<strong>Para saber más:</strong> umbrales, pesos y validación del índice se detallan en ",
+        "Bravo et al. (en preparación). El cálculo completo está en el ",
+        "<a href='https://github.com/gonzalobravoargentina/MBON_intertidal_monitoring_dashboard' target='_blank'>código del tablero (GitHub)</a>."))),
+    tags$p(style = "margin-top:10px;font-size:11px;color:#a0aec0;font-style:italic;",
+           "MBON Pole to Pole · IOC-UNESCO Ocean Best Practices")
+  )
 }
 
 mostrar_modal_risi <- function() {
   showModal(modalDialog(
     title = "Índice RISI — Rocky Intertidal Status Index",
+    tags$style(".modal-dialog { max-width: 960px; }"),
     easyClose = TRUE, size = "l",
     footer = modalButton("Cerrar"),
     contenido_modal_risi()
