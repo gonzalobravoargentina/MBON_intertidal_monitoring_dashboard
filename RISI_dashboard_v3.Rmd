@@ -92,6 +92,15 @@ svg.risi-callouts { position: absolute; left: 0; top: 0; width: 100%; height: 10
 .seg-toggle .radio-inline input:checked + span { background: #e6f1fb; color: #0c447c; font-weight: 700; }
 .coralnet-link { font-size: 11px; color: #2980b9; font-weight: 600; text-decoration: none; display: inline-block; margin-bottom: 6px; }
 .coralnet-link:hover { text-decoration: underline; }
+.click-hint { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap;
+              background: #1b2a3b; color: #ffffff; font-size: 12px; line-height: 1.3;
+              padding: 6px 14px 6px 10px; border-radius: 16px; margin: 0 0 8px 0;
+              box-shadow: 0 1px 4px rgba(0,0,0,.18); animation: hint-pulse 1.8s ease-in-out 3; }
+.click-hint .ico { font-size: 14px; line-height: 1; }
+.click-hint b { color: #ffffff; }
+.click-hint .nota { opacity: .75; font-size: 11px; }
+@keyframes hint-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(27,42,59,.45); }
+                        50%      { box-shadow: 0 0 0 7px rgba(27,42,59,0); } }
 
 /* ── General ── */
 body, .tab-content { background-color: #f0f4f8 !important; }
@@ -1200,6 +1209,7 @@ tags$div(class="scroll-content",
       uiOutput("heatmap_risi_desc", inline = TRUE)
     ),
     leyenda_html(class_cols[RISI_levels]),
+    uiOutput("heatmap_hint"),
     plotlyOutput("heatmap_risi", height = "300px")
   ),
 
@@ -1438,17 +1448,24 @@ output$heatmap_risi_title <- renderUI({
 
 output$heatmap_risi_desc <- renderUI({
   by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
-  base <- if (by_site)
+  if (by_site)
     paste0("Estado ecológico (RISI) en cada sitio de ", nombre_localidad(input$sel_localidad),
            " a lo largo de los años de muestreo.")
   else
     "Estado ecológico (RISI) promedio por localidad y año."
+})
+
+# Indicación destacada de que las cajas abren CoralNet
+output$heatmap_hint <- renderUI({
   # CoralNet filtra por año, no por estación: con una estación seleccionada
   # el link abre las fotos de ambas estaciones de ese año.
-  est <- input$sel_estacion
+  est  <- input$sel_estacion
   nota <- if (!is.null(est) && est != "ALL")
-    " (CoralNet abre el año completo, con ambas estaciones)." else "."
-  paste0(base, " Hacé click en una caja para ver esas fotos en CoralNet", nota)
+    tags$span(class = "nota", "· abre el año completo, ambas estaciones")
+  tags$div(class = "click-hint",
+    tags$span(class = "ico", "📷"),
+    tags$span(tags$b("Hacé click en una caja"), " para ver sus fotos en CoralNet"),
+    nota)
 })
 
 output$heatmap_risi <- renderPlotly({
