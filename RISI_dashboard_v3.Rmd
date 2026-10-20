@@ -66,6 +66,11 @@ select option { background-color: #1b2a3b; }
 .section-title { font-size: 13px; font-weight: 700; color: #1b2a3b; border-left: 3px solid #2ecc71; padding-left: 8px; margin: 0 0 4px 0; }
 .section-desc { font-size: 11px; color: #7f8c8d; margin-bottom: 8px; line-height: 1.4; }
 #heatmap_risi .nsewdrag { cursor: pointer !important; }
+.info-btn { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+            border-radius: 50%; background: #e8ecf0; color: #5d7a96; font-size: 10px; font-weight: 700;
+            cursor: pointer; border: 1px solid #c8d6e0; line-height: 1; vertical-align: middle; margin-left: 6px;
+            text-transform: none; letter-spacing: 0; }
+.info-btn:hover { background: #dbe6ef; color: #0c447c; }
 svg.risi-callouts { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; z-index: 450; overflow: visible; }
 .risi-callout-line { stroke: #ffffff; stroke-width: 1.3; opacity: 0.9; }
 .risi-tether { stroke: #ffffff; stroke-width: 1; opacity: 0.85; }
@@ -190,6 +195,14 @@ body, .tab-content { background-color: #f0f4f8 !important; }
     if (!ids.length) return;
     setTimeout(function () { refreshAll(ids); }, 120);
     setTimeout(function () { refreshAll(ids); }, 450);
+  });
+
+  // Botones "?" puestos en títulos que no son de Shiny (p. ej. el de la
+  // tarjeta del mapa): el click se envía como un input con el nombre que
+  // indique data-modal, y el servidor abre el modal correspondiente.
+  $(document).on("click", ".info-btn[data-modal]", function (e) {
+    e.preventDefault(); e.stopPropagation();
+    if (window.Shiny) Shiny.setInputValue($(this).data("modal"), Date.now(), {priority: "event"});
   });
 
   $(document).on("shiny:connected", function () {
@@ -388,11 +401,7 @@ class_cols  <- c("Bad"="#B71C1C","Poor"="#FB8C00","Moderate"="#c9a800","Good"="#
 # sola al ancho de la ventana y nunca se encima con los ejes.
 # Botón "?" que abre un modal (mismo aspecto en todas las tarjetas)
 boton_info <- function(id)
-  actionLink(id, tags$span(style="
-    display:inline-flex;align-items:center;justify-content:center;
-    width:16px;height:16px;border-radius:50%;
-    background:#e8ecf0;color:#5d7a96;font-size:10px;font-weight:700;
-    cursor:pointer;border:1px solid #c8d6e0;line-height:1;", "?"))
+  actionLink(id, tags$span(class = "info-btn", "?"))
 
 leyenda_html <- function(cols) {
   tags$div(class = "leyenda-chips",
@@ -779,6 +788,7 @@ mostrar_modal_risi <- function() {
 observeEvent(input$show_risi_modal,      { mostrar_modal_risi() })
 observeEvent(input$show_risi_modal_side, { mostrar_modal_risi() })
 observeEvent(input$show_risi_modal_heat, { mostrar_modal_risi() })
+observeEvent(input$show_risi_modal_map,  { mostrar_modal_risi() })
 
 # ── Fotocuadrantes: filtros 100% propios de la pestaña ───────
 # Ninguno depende de Resultados: las dos pestañas son independientes.
@@ -946,7 +956,7 @@ tags$div(class="sidebar-inner",
 
 ## Column {data-width=460}
 
-### MAPA Índice RISI
+### MAPA Índice RISI <span class="info-btn" data-modal="show_risi_modal_map" title="Información sobre el RISI">?</span>
 
 ```{r main_map}
 leafletOutput("mapa_indice", height="100%", width="100%")
@@ -1105,7 +1115,8 @@ output$mapa_indice <- renderLeaflet({
              options = tileOptions(maxNativeZoom = 19, maxZoom = 22)) %>%
     # ── Classification card overlaid on map (survives zoom) ──
     addControl(html = risi_pills_html, position = "topright") %>%
-    addScaleBar("bottomleft", options = scaleBarOptions(imperial = FALSE, maxWidth = 100)) %>%
+    # arriba: abajo a la izquierda la tapaba el texto de atribución de las teselas
+    addScaleBar("topleft", options = scaleBarOptions(imperial = FALSE, maxWidth = 100)) %>%
     addLayersControl(baseGroups = c("Satélite","Mapa"),
                      options = layersControlOptions(collapsed = TRUE))
 
