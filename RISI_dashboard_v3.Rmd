@@ -692,8 +692,11 @@ contenido_modal_risi <- function() {
   wB <- W_core[["BIO"]]; wT <- W_core[["TBS"]]
 
   # chips de clase, con los mismos colores y cortes que usa el índice
-  lo <- c(risi_breaks[RISI_levels[-5]], Bad = 0)
-  hi <- c(High = 10, risi_breaks[RISI_levels[-5]])[RISI_levels]
+  rb <- risi_breaks
+  lo <- c(High = rb[["High"]], Good = rb[["Good"]], Moderate = rb[["Moderate"]],
+          Poor = rb[["Poor"]], Bad = 0)
+  hi <- c(High = 10, Good = rb[["High"]], Moderate = rb[["Good"]],
+          Poor = rb[["Moderate"]], Bad = rb[["Poor"]])   # límite superior de cada clase
   chips <- vapply(RISI_levels, function(cl) {
     rng <- if (cl == "High") paste0(sprintf("%.1f", lo[[cl]]), "–10.0")
            else paste0(sprintf("%.1f", lo[[cl]]), "–", sprintf("%.2f", hi[[cl]] - 0.01))
