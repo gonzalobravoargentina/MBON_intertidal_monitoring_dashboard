@@ -65,6 +65,12 @@ select option { background-color: #1b2a3b; }
 .chart-block { background: white; border-radius: 8px; box-shadow: 0 1px 5px rgba(0,0,0,0.07); padding: 12px 14px 10px 14px; }
 .section-title { font-size: 13px; font-weight: 700; color: #1b2a3b; border-left: 3px solid #2ecc71; padding-left: 8px; margin: 0 0 4px 0; }
 .section-desc { font-size: 11px; color: #7f8c8d; margin-bottom: 8px; line-height: 1.4; }
+.seg-toggle .form-group { margin: 0; }
+.seg-toggle .shiny-options-group { display: inline-flex; border: 1px solid #c8d6e0; border-radius: 6px; overflow: hidden; }
+.seg-toggle .radio-inline { margin: 0 !important; padding: 0 !important; }
+.seg-toggle .radio-inline input { position: absolute; opacity: 0; pointer-events: none; }
+.seg-toggle .radio-inline span { display: inline-block; padding: 4px 12px; font-size: 11.5px; color: #5d7a96; cursor: pointer; }
+.seg-toggle .radio-inline input:checked + span { background: #e6f1fb; color: #0c447c; font-weight: 700; }
 .coralnet-link { font-size: 11px; color: #2980b9; font-weight: 600; text-decoration: none; display: inline-block; margin-bottom: 6px; }
 .coralnet-link:hover { text-decoration: underline; }
 
@@ -275,6 +281,21 @@ dupl                 <- duplicated(siglas_vec) | duplicated(siglas_vec, fromLast
 if (any(dupl)) siglas_vec[dupl] <- abbreviate(localidades[dupl], minlength = 4)
 siglas_localidades   <- setNames(siglas_vec, localidades)   # named: full -> sigla
 
+# Nombres para mostrar (con tildes y sin abreviaturas) en los ejes donde
+# entran completos. Cualquier localidad nueva cae en Title Case.
+nombres_localidades_fix <- c(
+  "MAR DEL PLATA"="Mar del Plata", "ISLOTE LOBOS"="Islote Lobos",
+  "PUNTA BS AS"="Punta Buenos Aires", "PUNTA LOMA"="Punta Loma",
+  "PUNTA TOMBO"="Punta Tombo", "CABO DOS BAHIAS"="Cabo Dos Bahías",
+  "PIMCPA ISLA TOVA"="PIMCPA Isla Tova", "PIMCPA"="PIMCPA",
+  "PUNTA BUQUE"="Punta Buque", "MAKENKE"="Makenke", "MONTE LEON"="Monte León",
+  "RESERVA COSTA ATLANTICA"="Reserva Costa Atlántica",
+  "PLAYA LARGA"="Playa Larga", "PNTDF"="PNTDF")
+nombre_localidad <- function(x) {
+  x <- as.character(x)
+  ifelse(x %in% names(nombres_localidades_fix), nombres_localidades_fix[x], str_to_title(x))
+}
+
 catami_dicc <- c(
   "CNCA"="Anémonas coloniales","CNTR"="Anémonas","CRB"="Cirripedios",
   "MOB"="Bivalvos","MOG"="Gasterópodos","SP"="Esponja","WPOT"="Tubo poliqueto",
@@ -482,21 +503,53 @@ indice_resumen_mapa <- reactive({
              sigla=ifelse(locality %in% names(siglas_localidades), siglas_localidades[locality], locality))
 })
 
-cover_resumen <- reactive({
-  df <- AMP_filtrado(); req(nrow(df)>0)
-  x_var <- if (!is.null(input$sel_localidad)&&input$sel_localidad!="ALL") "site" else "locality"
-  df %>%
-    select(locality,site,Latitude,strata,estacion,all_of(catami_seleccion)) %>%
-    pivot_longer(all_of(catami_seleccion),names_to="CATAMI",values_to="Cobertura") %>%
-    mutate(CATAMI=recode(CATAMI,!!!catami_dicc)) %>%
-    group_by(across(all_of(c(x_var,"locality","strata","estacion","CATAMI")))) %>%
-    summarise(Cobertura=mean(Cobertura,na.rm=T),Latitude=mean(Latitude,na.rm=T),.groups="drop") %>%
-    filter(Cobertura>0) %>%
+# Cobertura media por localidad (o sitio) y estrato. La estación NO se usa
+# como faceta: la controla el filtro "Estación" de la barra lateral, y con
+# "Todas" se promedian cálida y fría. Según input$nivel_cobertura devuelve
+# las categorías CATAMI o los tres grupos funcionales.
+cobertura_estrato <- reactive({
+  df <- AMP_filtrado(); req(nrow(df) > 0)
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+  y_var   <- if (by_site) "site" else "locality"
+  grp     <- identical(input$nivel_cobertura, "grp")
+
+  if (grp) {
+    algas  <- intersect(c("MAEN","MAEC","MAA","MAS","MASR","MAF","MAG","MALCB"), names(df))
+    invert <- intersect(c("MOB","CRB","MOG"), names(df))
+    df <- df %>% mutate(
+      Algas           = rowSums(across(all_of(algas),  ~ as.numeric(.x)), na.rm = TRUE),
+      Invertebrados   = rowSums(across(all_of(invert), ~ as.numeric(.x)), na.rm = TRUE),
+      `Suelo desnudo` = as.numeric(coalesce(as.numeric(SC), 0)))
+    vars    <- c("Invertebrados", "Algas", "Suelo desnudo")
+    niveles <- vars
+  } else {
+    vars    <- catami_seleccion
+    # orden de apilado: invertebrados, algas, sustrato
+    orden   <- c("MOB","CRB","MOG","WPOT","MASR","MAS","MAF","MAEN","MAA","MAEC","MAG","MALCB","SC")
+    niveles <- unname(catami_dicc[intersect(orden, vars)])
+  }
+
+  out <- df %>%
+    select(all_of(y_var), Latitude, strata, all_of(vars)) %>%
+    mutate(across(all_of(vars), ~ as.numeric(.x))) %>%
+    pivot_longer(all_of(vars), names_to = "clase", values_to = "Cobertura") %>%
+    group_by(across(all_of(c(y_var, "strata", "clase")))) %>%
+    summarise(Cobertura = mean(Cobertura, na.rm = TRUE), .groups = "drop") %>%
+    filter(!is.na(Cobertura), Cobertura > 0)
+
+  # latitud media por fila, para ordenar de norte (arriba) a sur (abajo)
+  lat <- df %>% group_by(across(all_of(y_var))) %>%
+    summarise(lat = mean(as.numeric(Latitude), na.rm = TRUE), .groups = "drop")
+
+  out %>%
+    left_join(lat, by = y_var) %>%
     mutate(
-      eje_x=if(x_var=="locality") fct_reorder(.data[[x_var]],Latitude,.desc=T) else .data[[x_var]],
-      strata=factor(strata,levels=c("HIGHTIDE","MIDTIDE","LOWTIDE"),
-                    labels=c("Intermareal alto","Intermareal medio","Intermareal bajo")),
-      estacion=factor(estacion,levels=c("Cálida","Fría"))
+      eje_y  = as.character(.data[[y_var]]),
+      etiq_y = if (by_site) eje_y else nombre_localidad(eje_y),
+      clase  = if (grp) clase else recode(clase, !!!catami_dicc),
+      clase  = factor(clase, levels = niveles),
+      strata = factor(strata, levels = c("HIGHTIDE","MIDTIDE","LOWTIDE"),
+                      labels = c("Intermareal alto","Intermareal medio","Intermareal bajo"))
     )
 })
 
@@ -912,33 +965,27 @@ output$mapa_indice <- renderLeaflet({
 ```{r right_panel}
 tags$div(class="scroll-content",
 
-  # ── CATAMI ──────────────────────────────────────────────────
+  # ── Cobertura por estrato (CATAMI / grupos funcionales) ─────
   tags$div(class="chart-block",
-    tags$div(style="display:flex;align-items:center;gap:8px;margin-bottom:4px;",
-      tags$p(class="section-title",style="margin:0;","Cobertura bentónica por categorías CATAMI"),
-      actionLink("show_catami_modal",
-        tags$span(style="
-          display:inline-flex;align-items:center;justify-content:center;
-          width:16px;height:16px;border-radius:50%;
-          background:#e8ecf0;color:#5d7a96;font-size:10px;font-weight:700;
-          cursor:pointer;border:1px solid #c8d6e0;line-height:1;",
-          "?")
-      )
+    tags$div(style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:4px;",
+      tags$div(style="display:flex;align-items:center;gap:8px;",
+        tags$p(class="section-title",style="margin:0;","Cobertura bentónica por estrato"),
+        actionLink("show_catami_modal",
+          tags$span(style="
+            display:inline-flex;align-items:center;justify-content:center;
+            width:16px;height:16px;border-radius:50%;
+            background:#e8ecf0;color:#5d7a96;font-size:10px;font-weight:700;
+            cursor:pointer;border:1px solid #c8d6e0;line-height:1;",
+            "?")
+        )
+      ),
+      tags$div(class="seg-toggle",
+        radioButtons("nivel_cobertura", NULL, inline = TRUE,
+                     choices = c("Categorías CATAMI" = "cat", "Grupos funcionales" = "grp"),
+                     selected = "cat"))
     ),
-    tags$p(class="section-desc",HTML(
-      'Cobertura media (%) por localidad (sigla) o sitio, separada por estrato y estación.
-       Pasá el cursor sobre las barras para ver el nombre completo y el valor exacto.'
-    )),
-    plotlyOutput("barras_catami",height="400px")
-  ),
-
-  # ── Functional groups ───────────────────────────────────────
-  tags$div(class="chart-block",
-    tags$p(class="section-title","Cobertura por grupos funcionales"),
-    tags$p(class="section-desc",
-      "Algas (MAEN + MAEC + MAA + MAS + MASR + MAF + MAG + MALCB), Invertebrados (MOB + CRB + MOG) y Suelo desnudo (SC)."
-    ),
-    plotlyOutput("barras_grupos",height="380px")
+    tags$p(class="section-desc", uiOutput("cobertura_desc", inline = TRUE)),
+    uiOutput("cobertura_ui")
   ),
 
   # ── Área apilada CATAMI (solo cuando se filtra localidad) ────
@@ -996,38 +1043,66 @@ tags$div(class="scroll-content",
 ```
 
 ```{r right_servers, include=FALSE}
-output$barras_catami <- renderPlotly({
-  df_cov <- cover_resumen(); req(nrow(df_cov)>0)
-  by_site <- !is.null(input$sel_localidad)&&input$sel_localidad!="ALL"
-  x_label <- if(by_site) "Sitio" else "Localidad"
+output$cobertura_desc <- renderUI({
+  est <- input$sel_estacion
+  est_txt <- if (is.null(est) || est == "ALL") "cálida y fría promediadas" else paste("estación", tolower(est))
+  if (identical(input$nivel_cobertura, "grp"))
+    HTML(paste0("Algas (MAEN + MAEC + MAA + MAS + MASR + MAF + MAG + MALCB), Invertebrados (MOB + CRB + MOG) ",
+                "y Suelo desnudo (SC). Cobertura media (%), ", est_txt,
+                ". Para separar estaciones usá el filtro <b>Estación</b>."))
+  else
+    HTML(paste0("Cobertura media (%) de cada categoría CATAMI, ", est_txt,
+                ". Localidades de norte a sur. Para separar estaciones usá el filtro <b>Estación</b>."))
+})
 
-  cats <- unique(df_cov$CATAMI); cols <- colores_catami_fixed[cats]; falt <- is.na(cols)
-  if(any(falt)) cols[falt] <- brewer.pal(max(3,sum(falt)),"Paired")[seq_len(sum(falt))]
+# Alto del gráfico según la cantidad de filas (14 localidades o pocos sitios)
+output$cobertura_ui <- renderUI({
+  n <- n_distinct(cobertura_estrato()$eje_y)
+  plotlyOutput("barras_cobertura", height = paste0(max(300, 24 * n + 230), "px"))
+})
 
-  # x-axis: show siglas for localities, full name for sites
-  label_fn <- if (!by_site) {
-    function(x) ifelse(x %in% names(siglas_localidades), siglas_localidades[x], x)
+output$barras_cobertura <- renderPlotly({
+  d <- cobertura_estrato(); req(nrow(d) > 0)
+  by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
+  y_label <- if (by_site) "Sitio" else "Localidad"
+  grp     <- identical(input$nivel_cobertura, "grp")
+
+  # filas de norte (arriba) a sur (abajo): en ggplot el primer nivel va abajo
+  orden_y <- d %>% distinct(etiq_y, lat) %>% arrange(lat) %>% pull(etiq_y)
+  d <- d %>% mutate(etiq_y = factor(etiq_y, levels = unique(orden_y)))
+
+  if (grp) {
+    cols <- c("Invertebrados" = "#3498db", "Algas" = "#2ecc71", "Suelo desnudo" = "#95a5a6")
+    nombre_leyenda <- "Grupo funcional"
   } else {
-    function(x) x
+    lv   <- levels(d$clase)
+    cols <- colores_catami_fixed[lv]; falt <- is.na(cols)
+    if (any(falt)) cols[falt] <- brewer.pal(max(3, sum(falt)), "Paired")[seq_len(sum(falt))]
+    names(cols) <- lv
+    nombre_leyenda <- "CATAMI"
   }
 
-  p <- ggplot(df_cov, aes(x=eje_x, y=Cobertura, fill=CATAMI,
-    text=paste0(x_label,": ",eje_x,"<br>CATAMI: ",CATAMI,"<br>Cobertura: ",round(Cobertura,1),"%"))) +
-    geom_col() +
-    facet_grid(estacion~strata) +
-    scale_x_discrete(labels=label_fn) +
-    scale_fill_manual(values=cols,name="CATAMI") +
-    labs(x=x_label,y="Cobertura media (%)") +
-    theme_minimal(base_size=10) +
-    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5,size=8),
-          strip.text=element_text(face="bold",size=9))
+  p <- ggplot(d, aes(x = Cobertura, y = etiq_y, fill = clase,
+        text = paste0(y_label, ": ", etiq_y, "<br>", strata,
+                      "<br>", clase, ": ", round(Cobertura, 1), "%"))) +
+    geom_col(position = position_stack(reverse = TRUE), width = 0.8) +
+    facet_wrap(~ strata, nrow = 1, drop = FALSE) +
+    scale_fill_manual(values = cols, name = nombre_leyenda, drop = TRUE) +
+    scale_x_continuous(limits = c(0, 100.5), breaks = c(0, 50, 100),
+                       labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
+    labs(x = "Cobertura media", y = NULL) +
+    theme_minimal(base_size = 10) +
+    theme(axis.text.y      = element_text(size = 9, colour = "#333333"),
+          axis.text.x      = element_text(size = 8),
+          strip.text       = element_text(face = "bold", size = 9.5),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor   = element_blank(),
+          panel.spacing.x    = unit(0.8, "lines"))
 
-  ggplotly(p,tooltip="text") %>%
-    layout(
-      legend=list(orientation="h", xanchor="center", x=0.5, y=-0.72,
-                  font=list(size=9)),
-      margin=list(b=230, t=20)
-    ) %>%
+  ggplotly(p, tooltip = "text") %>%
+    layout(legend = list(orientation = "h", xanchor = "center", x = 0.5, y = -0.1,
+                         yanchor = "top", font = list(size = 9.5)),
+           margin = list(l = 10, r = 10, t = 25, b = 90)) %>%
     config(displayModeBar = FALSE)
 })
 
@@ -1129,56 +1204,6 @@ output$plot_anio_estacion <- renderPlotly({
   ggplotly(p) %>% config(displayModeBar = FALSE)
 })
 
-output$barras_grupos <- renderPlotly({
-  df <- AMP_filtrado(); req(nrow(df)>0)
-  by_site <- !is.null(input$sel_localidad) && input$sel_localidad!="ALL"
-  x_var   <- if(by_site) "site" else "locality"
-  x_label <- if(by_site) "Sitio" else "Localidad"
-
-  algas_cols <- intersect(c("MAEN","MAEC","MAA","MAS","MASR","MAF","MAG","MALCB"), names(df))
-  invert_cols <- intersect(c("MOB","CRB","MOG"), names(df))
-
-  df2 <- df %>%
-    mutate(
-      Algas         = rowSums(across(all_of(algas_cols),  ~as.numeric(.)), na.rm=TRUE),
-      Invertebrados = rowSums(across(all_of(invert_cols), ~as.numeric(.)), na.rm=TRUE),
-      `Suelo desnudo` = as.numeric(coalesce(SC, 0))
-    ) %>%
-    select(all_of(x_var), locality, strata, estacion, Latitude, Algas, Invertebrados, `Suelo desnudo`) %>%
-    pivot_longer(cols=c(Algas,Invertebrados,`Suelo desnudo`), names_to="Grupo", values_to="Cobertura") %>%
-    group_by(across(all_of(c(x_var,"locality","strata","estacion","Grupo")))) %>%
-    summarise(Cobertura=mean(Cobertura,na.rm=T), Latitude=mean(Latitude,na.rm=T), .groups="drop") %>%
-    filter(Cobertura>0) %>%
-    mutate(
-      eje_x    = if(x_var=="locality") fct_reorder(.data[[x_var]],Latitude,.desc=T) else .data[[x_var]],
-      strata   = factor(strata,levels=c("HIGHTIDE","MIDTIDE","LOWTIDE"),
-                        labels=c("Intermareal alto","Intermareal medio","Intermareal bajo")),
-      estacion = factor(estacion,levels=c("Cálida","Fría")),
-      Grupo    = factor(Grupo, levels=c("Algas","Invertebrados","Suelo desnudo"))
-    )
-
-  req(nrow(df2)>0)
-  label_fn <- if(!by_site) function(x) ifelse(x%in%names(siglas_localidades),siglas_localidades[x],x) else function(x) x
-
-  p <- ggplot(df2, aes(x=eje_x, y=Cobertura, fill=Grupo,
-    text=paste0(x_label,": ",eje_x,"<br>Grupo: ",Grupo,"<br>Cobertura: ",round(Cobertura,1),"%"))) +
-    geom_col() +
-    facet_grid(estacion~strata) +
-    scale_x_discrete(labels=label_fn) +
-    scale_fill_manual(
-      values=c("Algas"="#2ecc71","Invertebrados"="#3498db","Suelo desnudo"="#95a5a6"),
-      name="Grupo funcional") +
-    labs(x=x_label, y="Cobertura media (%)") +
-    theme_minimal(base_size=10) +
-    theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5,size=8),
-          strip.text=element_text(face="bold",size=9))
-
-  ggplotly(p,tooltip="text") %>%
-    layout(legend=list(orientation="h",xanchor="center",x=0.5,y=-0.22,font=list(size=10)),
-           margin=list(b=100,t=20)) %>%
-    config(displayModeBar = FALSE)
-})
-
 # ── Heatmap RISI ──────────────────────────────────────────────
 output$heatmap_risi_title <- renderUI({
   by_site <- !is.null(input$sel_localidad) && input$sel_localidad != "ALL"
@@ -1272,7 +1297,7 @@ output$area_catami <- renderPlotly({
     group_by(year) %>%
     summarise(across(all_of(cats_use), ~mean(.x, na.rm = TRUE)), .groups = "drop") %>%
     pivot_longer(-year, names_to = "CATAMI", values_to = "Cobertura") %>%
-    # Rename CATAMI codes to display names (same as cover_resumen)
+    # Rename CATAMI codes to display names (same as cobertura_estrato)
     mutate(CATAMI = recode(CATAMI, !!!catami_dicc)) %>%
     filter(!is.na(Cobertura), Cobertura > 0)
 

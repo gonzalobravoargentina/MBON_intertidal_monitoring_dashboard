@@ -13,7 +13,7 @@ rsconnect::deployApp(
 
 rsconnect::deployApp(
   appDir = ".",
-  appPrimaryDoc = "RISI_dashboard.Rmd",
+  appPrimaryDoc = "RISI_dashboard_v3.Rmd",
   appName = "monitoreo-intermareal",
   forceUpdate = TRUE
 )

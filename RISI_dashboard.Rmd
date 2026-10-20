@@ -48,14 +48,15 @@ AMP <- merge(metadata, cover, by.x = "Name", by.y = "Image name", all.x = TRUE)
 # Ensure Date exists and is Date type
 AMP <- AMP %>%
   mutate(
-    Date = as.Date(Date),
-    year = year(Date),
-    month = month(Date),
-    estacion = ifelse(month %in% c(12, 1, 2, 3, 4, 5), "Cálida", "Fría")
+    Date     = as.Date(Date),
+    year     = year(Date),
+    month    = month(Date),
+    estacion = ifelse(month %in% c(12, 1, 2, 3, 4, 5), "Cálida", "Fría"),
+    Season   = ifelse(month %in% c(12, 1, 2, 3, 4, 5), "WARM", "COLD")
   )
 
 # CATAMI categories to plot (use only those that exist in AMP)
-catami_seleccion <- c("MAEN","MAF","CRB","MAA","MAEC","MAS","MOB","MOG","SC","WPOT")
+catami_seleccion <- c("MAEN","MAF","CRB","MAA","MAEC","MAG","MAS","MASR","MOB","MOG","SC","WPOT")
 catami_seleccion <- catami_seleccion[catami_seleccion %in% names(AMP)]
 
 # Available localities & years
@@ -81,7 +82,8 @@ catami_dicc <- c(
   "MAG"   = "Algas globosas",
   "MALA"  = "Algas laminares",
   "MALCB" = "Algas formadoras de bosque",
-  "MAS"   = "Algas hojas laminares finas"
+  "MAS"   = "Algas laminares verdes (Ulva)",
+  "MASR"  = "Algas laminares rojas (Pyropia)"
 )
 
 # Etiquetas de leyenda (NOMBRE COMPLETO) en el MISMO orden de catami_seleccion
@@ -92,31 +94,43 @@ labels_catami[is.na(labels_catami)] <- names(labels_catami)[is.na(labels_catami)
 
 ```{r risi_index_params, include=FALSE}
 # ============================================================
-# RISI (Rocky Intertidal Status Index)
-# *Implementación para el dashboard*
-# - Se calcula SOLO para el intermareal medio (MIDTIDE)
-# - Funciona con las mismas columnas CATAMI (MOB, MAS, MAF, SC)
-# - Se resume por Localidad (ALL) o por Sitio (si se selecciona localidad)
+# RISI (Rocky Intertidal Status Index) — Bravo et al. 2026
+# Cálculo solo para MIDTIDE; dos compartimentos: BIO y DIST
 # ============================================================
 
-# Weights for the state components (relative importance)
-W_core <- c(BIO = 24, MAF = 12, SC = 15)
+# Pesos de compartimentos; Wsum4_core es el denominador normalizador
+W_core     <- c(BIO = 25, DIST = 20)
+Wsum4_core <- sum(W_core) * 4   # = 180
 
-# Contribution of macroalgae to BIO relative to MOB
-mas_factor <- 0.6
+# Factores BIO (relativos a MOB = 1.0)
+masr_factor <- 0.8    # Pyropia sp.    (alga nativa estructurante)
+mas_factor  <- 0.4    # Ulva spp.      (alga oportunista)
+maen_factor <- 0.25   # Algas incrustantes (sustrato estable, menor complejidad)
 
-# Moderate penalty rule threshold:
-MOB_threshold <- 5
+# Umbrales para penalización de BIO
+MOB_threshold  <- 5    # MOB < este valor activa la penalización
+MASR_threshold <- 10   # MASR >= este valor compensa → sin penalización
 
-# Normalizer (maximum possible weighted score):
-Wsum4_core <- sum(W_core) * 4
+# Pesos dentro del compartimento DIST
+w_SC  <- 0.6   # SC pesa más (pérdida menos reversible)
+w_MAF <- 0.4   # MAF pesa menos (floración efímera)
 
-# Bare-substrate override parameters
-SC_bare_threshold    <- 85
-MOB_exception_thr    <- 10
-RISI_bare_cap <- 2.0
+# Cap de colapso estructural
+SC_collapse_thresh  <- 85
+MOB_collapse_thresh <- 10
+RISI_collapse_cap   <- 2.0
 
-# Scoring functions (0–4)
+RISI_levels <- c("High", "Good", "Moderate", "Poor", "Bad")
+
+class_cols <- c(
+  "Bad"      = "#B71C1C",
+  "Poor"     = "#FB8C00",
+  "Moderate" = "#FDD835",
+  "Good"     = "#66C2A5",
+  "High"     = "#3B7EA1"
+)
+
+# Score BIO (0–4): más cobertura biogénica = mejor condición
 S_bio_fun <- function(bio) {
   case_when(
     is.na(bio) ~ NA_real_,
@@ -128,7 +142,8 @@ S_bio_fun <- function(bio) {
   )
 }
 
-S_inv_fun <- function(x) {
+# Score inverso SC (0–4): más sustrato desnudo = peor condición
+S_inv_SC <- function(x) {
   case_when(
     is.na(x) ~ NA_real_,
     x <= 5   ~ 4,
@@ -136,6 +151,34 @@ S_inv_fun <- function(x) {
     x <= 30  ~ 2,
     x <= 60  ~ 1,
     TRUE     ~ 0
+  )
+}
+
+# Score MAF ajustado fenológicamente (estación WARM más permisiva)
+S_inv_MAF_warm <- function(x) {
+  case_when(
+    is.na(x) ~ NA_real_,
+    x <= 15  ~ 4,
+    x <= 30  ~ 3,
+    x <= 50  ~ 2,
+    x <= 70  ~ 1,
+    TRUE     ~ 0
+  )
+}
+S_inv_MAF_cold <- function(x) {
+  case_when(
+    is.na(x) ~ NA_real_,
+    x <= 5   ~ 4,
+    x <= 15  ~ 3,
+    x <= 30  ~ 2,
+    x <= 60  ~ 1,
+    TRUE     ~ 0
+  )
+}
+S_inv_MAF_phenological <- function(x, season) {
+  case_when(
+    season == "WARM" ~ S_inv_MAF_warm(x),
+    TRUE             ~ S_inv_MAF_cold(x)
   )
 }
 
@@ -149,16 +192,6 @@ classify_RISI <- function(x) {
     TRUE     ~ "Bad"
   )
 }
-
-RISI_levels <- c("High", "Good", "Moderate", "Poor", "Bad")
-
-class_cols <- c(
-  "Bad"      = "#B71C1C",
-  "Poor"     = "#FB8C00",
-  "Moderate" = "#FDD835",
-  "Good"     = "#66C2A5",
-  "High"     = "#3B7EA1"
-)
 ```
 
 # Filtros {.sidebar}
@@ -282,42 +315,57 @@ colores_catami <- reactive({
 AMP_index <- reactive({
   df <- AMP_filtrado()
   req(nrow(df) > 0)
+  req(all(c("strata", "MOB", "MAF", "SC", "Season") %in% names(df)))
 
-  # Requiere columnas mínimas
-  req(all(c("strata", "MOB", "MAS", "MAF", "SC") %in% names(df)))
+  # Agregar MASR y MAEN como 0 si no existen en los datos
+  if (!"MASR" %in% names(df)) df$MASR <- 0
+  if (!"MAEN" %in% names(df)) df$MAEN <- 0
+  if (!"MAS"  %in% names(df)) df$MAS  <- 0
 
   df %>%
-    mutate(
-      strata = toupper(as.character(strata))
-    ) %>%
+    mutate(strata = toupper(as.character(strata))) %>%
     filter(strata == "MIDTIDE") %>%
     mutate(
-      MOB = as.numeric(MOB),
-      MAS = as.numeric(MAS),
-      MAF = as.numeric(MAF),
-      SC  = as.numeric(SC),
+      MOB  = as.numeric(MOB),
+      MASR = as.numeric(MASR),
+      MAS  = as.numeric(MAS),
+      MAEN = as.numeric(MAEN),
+      MAF  = as.numeric(MAF),
+      SC   = as.numeric(SC),
 
-      MAS_MAF_group = coalesce(MAS, 0) + coalesce(MAF, 0),
-      BIO = pmin(100, coalesce(MOB, 0) + mas_factor * MAS_MAF_group),
+      # -- Compartimento BIO --
+      MASR_cov  = coalesce(MASR, 0),
+      MAS_group = coalesce(MAS,  0),
+      MAEN_cov  = coalesce(MAEN, 0),
+      BIO = pmin(100,
+                 coalesce(MOB, 0) +
+                 masr_factor * MASR_cov +
+                 mas_factor  * MAS_group +
+                 maen_factor * MAEN_cov),
 
+      # Penalización: Ulva sin base estructural (sin mejillones ni Pyropia)
       S_BIO = if_else(
-        (MAS_MAF_group > 0) & (coalesce(MOB, 0) < MOB_threshold),
+        (MAS_group > 0) &
+        (coalesce(MOB, 0) < MOB_threshold) &
+        (MASR_cov < MASR_threshold),
         1,
         S_bio_fun(BIO)
       ),
 
-      S_MAF = S_inv_fun(MAF),
-      S_SC  = S_inv_fun(SC),
+      # -- Compartimento DIST (ajuste fenológico en MAF) --
+      S_MAF  = S_inv_MAF_phenological(coalesce(MAF, 0), Season),
+      S_SC   = S_inv_SC(coalesce(SC, 0)),
+      S_DIST = w_MAF * S_MAF + w_SC * S_SC,
 
-      num = W_core["BIO"] * S_BIO +
-        W_core["MAF"] * S_MAF +
-        W_core["SC"]  * S_SC,
-
+      # -- RISI 0-10 --
+      num      = W_core["BIO"] * S_BIO + W_core["DIST"] * S_DIST,
       RISI_raw = (num / Wsum4_core) * 10,
 
+      # -- Cap de colapso estructural --
+      SC_val = coalesce(SC, 0),
       RISI = if_else(
-        (coalesce(SC, 0) >= SC_bare_threshold) & (coalesce(MOB, 0) < MOB_exception_thr),
-        pmin(RISI_raw, RISI_bare_cap),
+        SC_val >= SC_collapse_thresh & coalesce(MOB, 0) < MOB_collapse_thresh,
+        pmin(RISI_raw, RISI_collapse_cap),
         RISI_raw
       ),
 
