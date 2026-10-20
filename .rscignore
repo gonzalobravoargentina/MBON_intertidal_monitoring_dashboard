@@ -4,7 +4,8 @@
 #
 # Lo que SI necesita RISI_dashboard_v3.Rmd y por eso no esta aca:
 #   DATA/metadata.csv, DATA/percent_covers.csv, CATAMI.png,
-#   fotocuadrante.png, logo_blanco.png, RISI_1_web.jpg, RISI_2_web.jpg
+#   fotocuadrante.png, logo_blanco.png, RISI_1_web.jpg, RISI_2_web.jpg,
+#   protocolo_web.jpg
 
 # --- control de versiones y estado local de RStudio ---
 .git
@@ -30,6 +31,7 @@ dashboard.png
 logo.png
 RISI_1.jpg
 RISI_2.jpg
+protocolo.png
 get_SST.R
 rutas_drive.csv
 Publicar Shiny.R

@@ -7,7 +7,6 @@ output:
     vertical_layout: fill
     orientation: columns
     navbar:
-      - { title: "Protocolo Muestreo", icon: "ion-android-document", href: "https://repository.oceanbestpractices.org/handle/11329/2199.2", align: right }
       - { title: "MBON Pole to Pole", icon: "ion-android-globe", href: "https://marinebon.org/p2p/", align: right }
 runtime: shiny
 ---
@@ -885,6 +884,12 @@ observeEvent(input$sel_loc_fc, {
   updateSelectInput(session, "sel_site_fc", choices = ch, selected = "ALL")
 })
 
+output$protocolo_img <- renderImage(
+  list(src="protocolo_web.jpg", contentType="image/jpeg",
+       style="width:100%;height:auto;display:block;border-radius:8px;box-shadow:0 1px 8px rgba(0,0,0,0.12);"),
+  deleteFile=FALSE
+)
+
 output$fotocuadrante_img <- renderImage(
   list(src="fotocuadrante.png",contentType="image/png",
        style="max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;box-shadow:0 1px 6px rgba(0,0,0,0.15);"),
@@ -1738,6 +1743,36 @@ tags$div(class="scroll-content",
 
 # Matriz de completitud: qué se muestreó y qué falta, por sitio/localidad y año.
 # Usa sel_loc_fc, el filtro propio de esta pestaña.
+```
+
+# Protocolo
+
+## Column {.scrollable}
+
+### &nbsp;
+
+```{r protocolo_page, echo=FALSE}
+url_obp <- "https://repository.oceanbestpractices.org/handle/11329/2199.2"
+
+tags$div(style="max-width:1300px;margin:0 auto;padding:24px 20px 36px 20px;font-size:14px;color:#3d4852;line-height:1.7;",
+  # ── Encabezado + botón de descarga ───────────────────────────
+  tags$div(style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;margin-bottom:18px;",
+    tags$div(
+      tags$h2(style="font-size:22px;font-weight:700;color:#1e3a4a;margin:0 0 4px 0;border-bottom:3px solid #5ba4a4;display:inline-block;padding-bottom:4px;",
+        "Protocolo de muestreo"),
+      tags$p(style="font-size:13px;color:#5d7a96;margin:6px 0 0 0;max-width:720px;",
+        "Resumen visual del trabajo de campo con fotocuadrantes en el intermareal rocoso, según el protocolo MBON Pole to Pole.")
+    ),
+    tags$a(href=url_obp, target="_blank",
+      style="background:#2c7873;color:white;padding:10px 18px;border-radius:6px;font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.15);",
+      HTML("&#11015;&nbsp; Descargar protocolo completo (Ocean Best Practices)"))
+  ),
+  # ── Diagrama ─────────────────────────────────────────────────
+  imageOutput("protocolo_img", height="auto"),
+  tags$p(style="font-size:12px;color:#718096;margin-top:12px;",
+    HTML(paste0("El protocolo completo está publicado en el repositorio <em>Ocean Best Practices</em> (IOC-UNESCO): ",
+                "<a href='", url_obp, "' target='_blank' style='color:#2c7873;'>", url_obp, "</a>")))
+)
 ```
 
 # Información
