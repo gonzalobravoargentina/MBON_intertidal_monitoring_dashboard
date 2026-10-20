@@ -805,6 +805,93 @@ observeEvent(input$show_risi_modal_side, { mostrar_modal_risi() })
 observeEvent(input$show_risi_modal_heat, { mostrar_modal_risi() })
 observeEvent(input$show_risi_modal_map,  { mostrar_modal_risi() })
 
+# ── Esfuerzo de muestreo: un heatmap localidad (o sitio) x campaña ──
+# Reemplaza a "Fotocuadrantes por muestreo" (localidad x año) y a "Esfuerzo
+# por año y estación" (barras): las columnas son campañas (cálida y fría de
+# cada año), una franja arriba marca la estación y la fila "Total" suma cada
+# campaña, que era lo que mostraban las barras.
+esfuerzo_fc <- reactive({
+  by_site <- !is.null(input$sel_loc_fc) && input$sel_loc_fc != "ALL"
+  g_var   <- if (by_site) "site" else "locality"
+  df <- AMP_filtrado_fc() %>% filter(!is.na(year), !is.na(estacion))
+  if (by_site) df <- df %>% filter(locality == input$sel_loc_fc)
+  req(nrow(df) > 0)
+
+  cnt <- df %>% count(across(all_of(c(g_var, "year", "estacion"))), name = "n_fotos") %>%
+    rename(fila = 1)
+  lat <- df %>% group_by(across(all_of(g_var))) %>%
+    summarise(lat = mean(as.numeric(Latitude), na.rm = TRUE), .groups = "drop") %>%
+    rename(fila = 1)
+
+  camp <- cnt %>% distinct(year, estacion) %>%
+    mutate(ord = year + if_else(estacion == "Fría", 0.5, 0)) %>% arrange(ord) %>%
+    mutate(camp = paste0(estacion, "\n", year))
+
+  filas <- lat %>% arrange(lat) %>% pull(fila)              # sur primero = abajo
+  etiq  <- if (by_site) str_to_title(filas) else nombre_localidad(filas)
+
+  grid <- expand.grid(fila = filas, camp = camp$camp, stringsAsFactors = FALSE) %>%
+    left_join(camp, by = "camp") %>%
+    left_join(cnt, by = c("fila", "year", "estacion")) %>%
+    mutate(etiqueta = setNames(etiq, filas)[fila])
+
+  tot <- cnt %>% group_by(year, estacion) %>% summarise(n_fotos = sum(n_fotos), .groups = "drop") %>%
+    left_join(camp, by = c("year", "estacion"))
+
+  list(grid = grid, tot = tot, camp = camp, niveles_y = c(etiq, "Total", " "), by_site = by_site)
+})
+
+output$esfuerzo_desc <- renderUI({
+  e <- esfuerzo_fc()
+  quien <- if (e$by_site) paste0("cada sitio de ", nombre_localidad(input$sel_loc_fc)) else "cada localidad (norte a sur)"
+  paste0("Número de fotocuadrantes en ", quien, " y campaña, con todos los estratos. ",
+         "La fila Total suma cada campaña; las celdas con x no se muestrearon.")
+})
+
+output$esfuerzo_ui <- renderUI({
+  n <- length(esfuerzo_fc()$niveles_y)
+  plotlyOutput("matriz_completitud_fc", height = paste0(22 * n + 95, "px"))
+})
+
+output$matriz_completitud_fc <- renderPlotly({
+  e <- esfuerzo_fc(); g <- e$grid; tot <- e$tot
+  lv_x <- e$camp$camp
+  mx   <- max(g$n_fotos, na.rm = TRUE)
+  g <- g %>% mutate(
+    x = factor(camp, levels = lv_x), y = factor(etiqueta, levels = e$niveles_y),
+    lbl = ifelse(is.na(n_fotos), "x", formatC(n_fotos, format = "d", big.mark = ".")),
+    txt_col = ifelse(!is.na(n_fotos) & n_fotos > 0.55 * mx, "white", "#2c3e50"),
+    tip = ifelse(is.na(n_fotos), paste0(etiqueta, "<br>", sub("\n", " ", camp), "<br>Sin muestreo"),
+                 paste0(etiqueta, "<br>", sub("\n", " ", camp), "<br>", n_fotos, " fotocuadrantes")))
+  tot <- tot %>% mutate(x = factor(camp, levels = lv_x), y = factor("Total", levels = e$niveles_y),
+                        lbl = formatC(n_fotos, format = "d", big.mark = "."),
+                        tip = paste0("Total ", sub("\n", " ", camp), "<br>", n_fotos, " fotocuadrantes"))
+  franja <- e$camp %>% mutate(x = factor(camp, levels = lv_x), y = factor(" ", levels = e$niveles_y),
+                              tip = sub("\n", " ", camp))
+
+  p <- ggplot(mapping = aes(x = x, y = y, text = tip)) +
+    geom_tile(data = g, aes(fill = n_fotos), colour = "white", linewidth = 0.6) +
+    geom_text(data = g, aes(label = lbl, colour = txt_col), size = 2.5) +
+    # fila Total con fondo fijo: no entra en la escala de color
+    geom_tile(data = tot, fill = "#e9edf1", colour = "white", linewidth = 0.6) +
+    geom_text(data = tot, aes(label = lbl), colour = "#1b2a3b", size = 2.6, fontface = "bold") +
+    # franja de estación (mismos colores que el resto del dashboard)
+    geom_tile(data = filter(franja, estacion == "Cálida"), fill = estacion_cols[["Cálida"]], height = 0.45) +
+    geom_tile(data = filter(franja, estacion == "Fría"),   fill = estacion_cols[["Fría"]],   height = 0.45) +
+    scale_fill_gradient(low = "#dfe6ec", high = "#2c3e50", na.value = "#f4f6f8") +
+    scale_colour_identity() +
+    scale_y_discrete(drop = FALSE) +
+    labs(x = NULL, y = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(panel.grid = element_blank(), legend.position = "none",
+          axis.text.y = element_text(size = 8.5, colour = "#333333"),
+          axis.text.x = element_text(size = 8, lineheight = 0.9))
+
+  ggplotly(p, tooltip = "text") %>%
+    layout(showlegend = FALSE, margin = list(t = 5, r = 10, b = 10)) %>%
+    config(displayModeBar = FALSE)
+})
+
 # ── Fotocuadrantes: filtros 100% propios de la pestaña ───────
 # Ninguno depende de Resultados: las dos pestañas son independientes.
 AMP_filtrado_fc <- reactive({
@@ -1410,16 +1497,6 @@ output$barras_indice_clases <- renderPlotly({
     config(displayModeBar = FALSE)
 })
 
-output$plot_anio_estacion <- renderPlotly({
-  df <- fotos_por_anio_estacion(); req(nrow(df)>0)
-  p <- ggplot(df,aes(x=factor(year),y=n_fotos,fill=estacion)) +
-    geom_col(position="dodge",width=0.65) +
-    scale_fill_manual(values=estacion_cols,name="Estación") +
-    labs(x="Año",y="Fotocuadrantes") +
-    theme_minimal(base_size=10) +
-    theme(legend.position="top",panel.grid.major.x=element_blank())
-  ggplotly(p) %>% config(displayModeBar = FALSE)
-})
 
 # ── Heatmap RISI ──────────────────────────────────────────────
 output$heatmap_risi_title <- renderUI({
@@ -1685,95 +1762,20 @@ tags$div(class="scroll-content",
     )
   ),
 
-  # ── Fotocuadrantes por muestreo ─────────────────────────────
+  # ── Esfuerzo de muestreo: localidad x campaña ───────────────
   tags$div(class="chart-block",
-    tags$p(class="section-title", "Fotocuadrantes por muestreo"),
-    plotlyOutput("matriz_completitud_fc", height="320px")
-  ),
-
-  # ── Esfuerzo ────────────────────────────────────────────────
-  tags$div(class="chart-block",
-    tags$p(class="section-title", "Esfuerzo por año y estación"),
-    plotlyOutput("plot_esfuerzo_fc", height="300px")
+    tags$p(class="section-title", "Fotocuadrantes por campaña"),
+    tags$p(class="section-desc", uiOutput("esfuerzo_desc", inline = TRUE)),
+    leyenda_html(estacion_cols),
+    uiOutput("esfuerzo_ui")
   )
 )
 ```
 
 ```{r fc_right_server, include=FALSE}
-output$plot_esfuerzo_fc <- renderPlotly({
-  df <- AMP_filtrado_fc() %>% filter(!is.na(year),!is.na(estacion)) %>%
-    count(year,estacion,name="n_fotos") %>% arrange(year,estacion)
-  req(nrow(df)>0)
-  p <- ggplot(df,aes(x=factor(year),y=n_fotos,fill=estacion)) +
-    # preserve="single": un año con una sola estación (p.ej. 2026) mantiene
-    # el ancho de una barra individual en vez de estirarse a ocupar las dos.
-    geom_col(width = 0.65,
-             position = position_dodge(width = 0.65, preserve = "single")) +
-    scale_fill_manual(values=estacion_cols,name="Estación") +
-    labs(x="Año",y="Fotocuadrantes") +
-    theme_minimal(base_size=10) +
-    theme(legend.position="top",panel.grid.major.x=element_blank())
-  ggplotly(p) %>% config(displayModeBar = FALSE)
-})
 
 # Matriz de completitud: qué se muestreó y qué falta, por sitio/localidad y año.
 # Usa sel_loc_fc, el filtro propio de esta pestaña.
-output$matriz_completitud_fc <- renderPlotly({
-  by_site <- !is.null(input$sel_loc_fc) && input$sel_loc_fc != "ALL"
-
-  df_mat <- AMP_filtrado_fc() %>% filter(!is.na(year))
-  if (by_site) df_mat <- df_mat %>% filter(locality == input$sel_loc_fc)
-
-  df_mat <- df_mat %>%
-    { if (by_site) group_by(., site, year) else group_by(., locality, year) } %>%
-    summarise(n_fotos = n(), .groups = "drop") %>%
-    rename(eje_y = 1)
-
-  req(nrow(df_mat) > 0)
-
-  # Orden geográfico norte→sur, igual que el heatmap RISI. Latitud
-  # ascendente = más al sur primero; como ggplot apila el eje y de abajo
-  # hacia arriba, el sur queda abajo y el norte arriba.
-  grp_var <- if (by_site) "site" else "locality"
-  df_lat  <- AMP %>% filter(!is.na(Latitude))
-  if (by_site) df_lat <- df_lat %>% filter(locality == input$sel_loc_fc)
-  lat_order <- df_lat %>%
-    group_by(across(all_of(grp_var))) %>%
-    summarise(lat_mn = mean(as.numeric(Latitude), na.rm = TRUE), .groups = "drop") %>%
-    arrange(lat_mn) %>%
-    pull(1)
-
-  todos_y <- lat_order[lat_order %in% unique(df_mat$eje_y)]
-  req(length(todos_y) > 0)
-  todos_x <- sort(unique(df_mat$year))
-
-  # Grilla completa: los huecos (combinaciones sin muestreo) quedan como "x"
-  grid <- expand.grid(eje_y = todos_y, year = todos_x, stringsAsFactors = FALSE) %>%
-    left_join(df_mat, by = c("eje_y", "year")) %>%
-    mutate(
-      year_f  = factor(year, levels = todos_x),
-      lbl     = ifelse(is.na(n_fotos), "x", as.character(n_fotos)),
-      tooltip = ifelse(is.na(n_fotos),
-                       paste0(eje_y, " – ", year, "\nSin datos"),
-                       paste0(eje_y, " – ", year, "\n", n_fotos, " fotos")),
-      # al final: si no es factor, ggplot reordena alfabéticamente
-      eje_y   = factor(eje_y, levels = todos_y)
-    )
-
-  p <- ggplot(grid, aes(x = year_f, y = eje_y, fill = n_fotos, text = tooltip)) +
-    geom_tile(color = "white", linewidth = 0.6) +
-    geom_text(aes(label = lbl), color = "white", size = 2.5) +
-    scale_fill_gradient(low = "#A5D6A7", high = "#1B5E20",
-                        na.value = "#BDBDBD", name = "N fotos") +
-    labs(x = "Año", y = NULL) +
-    theme_minimal(base_size = 9) +
-    theme(panel.grid = element_blank(),
-          axis.text.y = element_text(size = 8),
-          axis.text.x = element_text(size = 8),
-          legend.position = "right")
-
-  ggplotly(p, tooltip = "text") %>% config(displayModeBar = FALSE)
-})
 ```
 
 # Información
