@@ -297,11 +297,6 @@ catami_seleccion <- catami_seleccion[catami_seleccion %in% names(AMP)]
 localidades <- sort(unique(AMP$locality))
 anios       <- sort(unique(AMP$year))
 
-# Sitios de cada localidad, para el filtro dependiente de Fotocuadrantes
-sitios_por_loc <- AMP %>%
-  filter(!is.na(site), site != "") %>%
-  distinct(locality, site) %>%
-  arrange(locality, site)
 
 # ── Locality abbreviations (siglas) ──────────────────────────
 # First letters of each word in the locality name
@@ -895,17 +890,73 @@ AMP_filtrado_fc <- reactive({
   df
 })
 
-# El selector de sitio se repuebla con los sitios de la localidad elegida.
-# Sin localidad, queda inerte ("Todos"): listar sitios de todas las
-# localidades mezcladas no aportaría nada.
-observeEvent(input$sel_loc_fc, {
-  loc <- input$sel_loc_fc
-  ch  <- c("Todos" = "ALL")
-  if (!is.null(loc) && loc != "ALL") {
-    s  <- sitios_por_loc$site[sitios_por_loc$locality == loc]
-    if (length(s)) ch <- c(ch, setNames(s, s))
+# ── Filtros en cascada ────────────────────────────────────────
+# Cada selector ofrece solo los valores que existen dados los filtros que
+# están ARRIBA de él (localidad → sitio → año → estación → estrato).
+# Si la opción elegida sigue existiendo se conserva; si no, vuelve a "Todos".
+
+# Aplica los filtros previos. Un valor que no existe en lo ya filtrado se
+# ignora: al cambiar de localidad, el sitio viejo sigue vivo un instante
+# antes de que su selector se repueble, y sin esta guarda el año quedaría
+# sin opciones y se reiniciaría.
+filtrar_previos <- function(df, previos) {
+  for (col in names(previos)) {
+    v <- previos[[col]]
+    if (!is.null(v) && v != "ALL" && v %in% as.character(df[[col]]))
+      df <- df[!is.na(df[[col]]) & as.character(df[[col]]) == v, ]
   }
-  updateSelectInput(session, "sel_site_fc", choices = ch, selected = "ALL")
+  df
+}
+
+# Repuebla un selector con los valores disponibles en `df`.
+# `niveles` fija el orden (estaciones, estratos); si no, orden natural.
+actualizar_selector <- function(id, df, col, todos_lbl, actual, niveles = NULL) {
+  disp <- unique(as.character(df[[col]]))
+  disp <- disp[!is.na(disp) & disp != ""]
+  disp <- if (is.null(niveles)) sort(disp) else niveles[niveles %in% disp]
+  ch   <- c(setNames("ALL", todos_lbl), setNames(disp, disp))
+  sel  <- if (!is.null(actual) && actual %in% ch) actual else "ALL"
+  updateSelectInput(session, id, choices = ch, selected = sel)
+}
+
+niveles_estacion <- c("Cálida", "Fría")
+niveles_estrato  <- c("HIGHTIDE", "MIDTIDE", "LOWTIDE")
+
+# Resultados: localidad → año → estación
+observe({
+  df <- filtrar_previos(AMP, list(locality = input$sel_localidad))
+  actualizar_selector("sel_year", df, "year", "Todos", isolate(input$sel_year))
+})
+observe({
+  df <- filtrar_previos(AMP, list(locality = input$sel_localidad, year = input$sel_year))
+  actualizar_selector("sel_estacion", df, "estacion", "Todas",
+                      isolate(input$sel_estacion), niveles_estacion)
+})
+
+# Fotocuadrantes: localidad → sitio → año → estación → estrato.
+# Sin localidad el sitio queda en "Todos": listar los sitios de todas las
+# localidades mezcladas no aportaría nada.
+observe({
+  loc <- input$sel_loc_fc
+  df  <- if (is.null(loc) || loc == "ALL") AMP[0, ]
+         else filtrar_previos(AMP, list(locality = loc))
+  actualizar_selector("sel_site_fc", df, "site", "Todos", isolate(input$sel_site_fc))
+})
+observe({
+  df <- filtrar_previos(AMP, list(locality = input$sel_loc_fc, site = input$sel_site_fc))
+  actualizar_selector("sel_year_fc", df, "year", "Todos", isolate(input$sel_year_fc))
+})
+observe({
+  df <- filtrar_previos(AMP, list(locality = input$sel_loc_fc, site = input$sel_site_fc,
+                                  year = input$sel_year_fc))
+  actualizar_selector("sel_est_fc", df, "estacion", "Todas",
+                      isolate(input$sel_est_fc), niveles_estacion)
+})
+observe({
+  df <- filtrar_previos(AMP, list(locality = input$sel_loc_fc, site = input$sel_site_fc,
+                                  year = input$sel_year_fc, estacion = input$sel_est_fc))
+  actualizar_selector("sel_strata_fc", df, "strata", "Todos",
+                      isolate(input$sel_strata_fc), niveles_estrato)
 })
 
 output$protocolo_img <- renderImage(
