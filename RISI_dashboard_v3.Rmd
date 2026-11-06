@@ -249,6 +249,10 @@ library(forcats)
 library(stringr)
 
 options(dplyr.summarise.inform = FALSE)
+
+# Carpeta pdf/ servida como /pdf: el protocolo se muestra en un visor
+# embebido en la pestaña Protocolo. Solo se expone esa carpeta.
+shiny::addResourcePath("pdf", normalizePath("pdf"))
 ```
 
 ```{r dataread, include=FALSE, message=FALSE, warning=FALSE}
@@ -958,12 +962,6 @@ observe({
   actualizar_selector("sel_strata_fc", df, "strata", "Todos",
                       isolate(input$sel_strata_fc), niveles_estrato)
 })
-
-output$protocolo_img <- renderImage(
-  list(src="protocolo_web.jpg", contentType="image/jpeg",
-       style="width:100%;height:auto;display:block;border-radius:8px;box-shadow:0 1px 8px rgba(0,0,0,0.12);"),
-  deleteFile=FALSE
-)
 
 output$fotocuadrante_img <- renderImage(
   list(src="fotocuadrante_web.jpg",contentType="image/jpeg",
@@ -1858,26 +1856,42 @@ tags$div(class="scroll-content",
 
 ```{r protocolo_page, echo=FALSE}
 url_obp <- "https://repository.oceanbestpractices.org/handle/11329/2199.2"
+url_pdf <- "pdf/protocolo_web.pdf"
+estilo_boton <- function(bg) paste0("background:", bg, ";color:white;padding:9px 16px;border-radius:6px;",
+  "font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.15);")
 
-tags$div(style="max-width:1300px;margin:0 auto;padding:24px 20px 36px 20px;font-size:14px;color:#3d4852;line-height:1.7;",
-  # ── Encabezado + botón de descarga ───────────────────────────
-  tags$div(style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px;margin-bottom:18px;",
+tags$div(style="max-width:1100px;margin:0 auto;padding:20px 20px 30px 20px;font-size:14px;color:#3d4852;line-height:1.7;",
+  # ── Encabezado + botones ─────────────────────────────────────
+  tags$div(style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:14px;",
     tags$div(
       tags$h2(style="font-size:22px;font-weight:700;color:#1e3a4a;margin:0 0 4px 0;border-bottom:3px solid #5ba4a4;display:inline-block;padding-bottom:4px;",
         "Protocolo de muestreo"),
-      tags$p(style="font-size:13px;color:#5d7a96;margin:6px 0 0 0;max-width:720px;",
-        "Resumen visual del trabajo de campo con fotocuadrantes en el intermareal rocoso, según el protocolo MBON Pole to Pole.")
+      tags$p(style="font-size:13px;color:#5d7a96;margin:6px 0 0 0;max-width:640px;",
+        "Protocolo MBON Pole to Pole para el monitoreo del intermareal rocoso con fotocuadrantes. Podés hojearlo acá abajo.")
     ),
-    tags$a(href=url_obp, target="_blank",
-      style="background:#2c7873;color:white;padding:10px 18px;border-radius:6px;font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.15);",
-      HTML("&#11015;&nbsp; Descargar protocolo completo (Ocean Best Practices)"))
+    tags$div(style="display:flex;gap:8px;flex-wrap:wrap;",
+      tags$a(href=url_pdf, target="_blank", style=estilo_boton("#5d7a96"),
+        HTML("&#x26F6;&nbsp; Abrir en pantalla completa")),
+      tags$a(href=url_obp, target="_blank", style=estilo_boton("#2c7873"),
+        HTML("&#11015;&nbsp; Descargar desde Ocean Best Practices"))
+    )
   ),
-  # ── Diagrama ─────────────────────────────────────────────────
-  imageOutput("protocolo_img", height="auto"),
-  tags$p(style="font-size:12px;color:#718096;margin-top:12px;",
-    HTML(paste0("El protocolo completo está publicado en el repositorio <em>Ocean Best Practices</em> (IOC-UNESCO): ",
+  # ── Visor del PDF ────────────────────────────────────────────
+  # Va en un uiOutput: Shiny no renderiza salidas de pestañas ocultas, así
+  # que el PDF (~6 MB) se descarga solo cuando alguien abre esta pestaña,
+  # no en cada visita al tablero.
+  uiOutput("protocolo_visor"),
+  tags$p(style="font-size:12px;color:#718096;margin-top:10px;",
+    HTML(paste0("Versión oficial en el repositorio <em>Ocean Best Practices</em> (IOC-UNESCO): ",
                 "<a href='", url_obp, "' target='_blank' style='color:#2c7873;'>", url_obp, "</a>")))
 )
+
+output$protocolo_visor <- renderUI({
+  tags$iframe(src = paste0(url_pdf, "#view=FitH&pagemode=none"),
+              title = "Protocolo de muestreo MBON Pole to Pole",
+              style = paste0("width:100%;height:calc(100vh - 230px);min-height:560px;",
+                             "border:1px solid #dfe6ec;border-radius:8px;background:#f4f6f8;"))
+})
 ```
 
 # Información
