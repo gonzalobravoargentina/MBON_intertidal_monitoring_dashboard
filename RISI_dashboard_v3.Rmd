@@ -296,6 +296,11 @@ if (!is.null(cache) && identical(cache$huella, huella_csv)) {
   try(saveRDS(list(huella = huella_csv, AMP = AMP), cache_amp), silent = TRUE)
 }
 
+# Localidades ocultas en el tablero (siguen en los CSV y en CoralNet).
+# Para volver a mostrar una, sacarla de este vector.
+localidades_ocultas <- c("PUERTO MADRYN")
+AMP <- AMP %>% filter(!locality %in% localidades_ocultas)
+
 catami_seleccion <- c("MAEN","MAF","CRB","MAA","MAEC","MAG","MAS","MASR","MOB","MOG","SC","WPOT")
 catami_seleccion <- catami_seleccion[catami_seleccion %in% names(AMP)]
 localidades <- sort(unique(AMP$locality))
