@@ -1467,43 +1467,69 @@ output$mob_desc <- renderUI({
          ". Todos los paneles comparten la escala 0–100%. Visible cuando se seleccionan todos los años.")
 })
 
+# Paneles del gráfico de MOB: hasta 4 por fila, repartidos parejo entre filas
+# (6 paneles → 3 + 3). subplot() reparte así, y el código usa lo mismo.
+mob_ncol <- function(n) ceiling(n / ceiling(n / 4))
+
 output$mob_ui <- renderUI({
   n <- n_distinct(mob_periodo()$panel)
-  plotlyOutput("trend_mob", height = paste0(ceiling(n / 4) * 118 + 50, "px"))
+  plotlyOutput("trend_mob", height = paste0(ceiling(n / 4) * 150 + 30, "px"))
 })
 
+# Se arma con plotly nativo (un subplot por panel) y no con ggplotly +
+# facet_wrap: ggplotly asignaba mal los ejes de las facetas y los datos de un
+# sitio aparecían en el panel de otro (p. ej. Punta Ulloa Sur dibujado en
+# Playa Burbujas, con la fila superior vacía).
 output$trend_mob <- renderPlotly({
   d <- mob_periodo(); req(nrow(d) > 0)
-  orden <- d %>% distinct(panel, lat) %>% arrange(desc(lat)) %>% pull(panel)
-  d <- d %>% mutate(panel = factor(panel, levels = unique(orden)),
-                    grp   = paste(panel, seg))
+  orden <- d %>% distinct(panel, lat) %>% arrange(desc(lat)) %>% pull(panel) %>% unique()
+  n     <- length(orden)
+  ncol  <- mob_ncol(n)
   anios <- sort(unique(d$year))
+  rango_x <- c(min(anios) - 0.35, max(anios) + 0.85)
+  # etiquetas cortas ('21, '23 ...) para que no se encimen en paneles angostos
+  etiq_x  <- paste0("'", sprintf("%02d", anios %% 100))
 
-  p <- ggplot(d, aes(x = x, y = MOB)) +
-    geom_ribbon(aes(ymin = 0, ymax = MOB, group = grp), fill = "#5f5e5a", alpha = 0.08) +
-    geom_line(aes(group = grp), colour = "#5f5e5a", linewidth = 0.6) +
-    geom_point(aes(colour = estacion, shape = estacion,
-                   text = paste0(panel, "<br>", estacion, " ", year,
-                                 "<br>MOB: ", round(MOB, 1), "%",
-                                 "<br>Fotocuadrantes: ", n)),
-               size = 2) +
-    facet_wrap(~ panel, ncol = 4) +
-    scale_colour_manual(values = estacion_cols, drop = FALSE) +
-    scale_shape_manual(values = estacion_shapes, drop = FALSE) +
-    scale_x_continuous(breaks = anios, labels = anios,
-                       limits = c(min(anios) - 0.2, max(anios) + 0.7)) +
-    scale_y_continuous(limits = c(0, 100), breaks = c(0, 50, 100)) +
-    labs(x = NULL, y = NULL) +
-    theme_minimal(base_size = 9) +
-    theme(legend.position  = "none",
-          strip.text       = element_text(face = "bold", size = 9, hjust = 0),
-          panel.grid.minor = element_blank(),
-          panel.grid.major.x = element_blank(),
-          axis.text        = element_text(size = 7.5),
-          panel.spacing    = unit(0.7, "lines"))
+  un_panel <- function(pn, i) {
+    dp <- d %>% filter(panel == pn) %>% arrange(x)
+    p  <- plot_ly()
+    # línea + sombreado, cortados donde falta una campaña
+    for (sg in unique(dp$seg)) {
+      p <- p %>% add_trace(data = dp %>% filter(seg == sg), x = ~x, y = ~MOB,
+                           type = "scatter", mode = "lines", fill = "tozeroy",
+                           fillcolor = "rgba(95,94,90,0.08)",
+                           line = list(color = "#5f5e5a", width = 1.2),
+                           hoverinfo = "skip", showlegend = FALSE)
+    }
+    # un punto por campaña, color y forma según la estación
+    for (est in names(estacion_cols)) {
+      de <- dp %>% filter(estacion == est)
+      if (nrow(de) == 0) next
+      p <- p %>% add_trace(data = de, x = ~x, y = ~MOB, type = "scatter", mode = "markers",
+                           marker = list(color = estacion_cols[[est]], size = 7,
+                                         symbol = if (est == "Fría") "square" else "circle"),
+                           text = ~paste0(pn, "<br>", estacion, " ", year,
+                                          "<br>MOB: ", round(MOB, 1), "%",
+                                          "<br>Fotocuadrantes: ", n),
+                           hoverinfo = "text", showlegend = FALSE)
+    }
+    p %>% layout(
+      xaxis = list(range = rango_x, tickvals = anios, ticktext = etiq_x,
+                   tickfont = list(size = 9), showgrid = FALSE, zeroline = FALSE),
+      yaxis = list(range = c(-3, 105), tickvals = c(0, 50, 100),
+                   showticklabels = ((i - 1) %% ncol) == 0,   # solo la primera columna
+                   tickfont = list(size = 9), gridcolor = "#eceff1", zeroline = FALSE),
+      annotations = list(list(text = paste0("<b>", pn, "</b>"), x = 0, y = 1.02,
+                              xref = "paper", yref = "paper", xanchor = "left",
+                              yanchor = "bottom", showarrow = FALSE,
+                              font = list(size = 11, color = "#2d3748"))))
+  }
 
-  ggplotly(p, tooltip = "text") %>%
-    layout(showlegend = FALSE, margin = list(t = 25, r = 10, b = 20, l = 30)) %>%
+  paneles <- lapply(seq_along(orden), function(i) un_panel(orden[i], i))
+  subplot(paneles, nrows = ceiling(n / 4), shareX = FALSE, shareY = FALSE,
+          titleX = FALSE, titleY = FALSE, margin = c(0.015, 0.015, 0.07, 0.04)) %>%
+    layout(showlegend = FALSE, margin = list(t = 25, r = 10, b = 20, l = 30),
+           hovermode = "closest") %>%
     config(displayModeBar = FALSE)
 })
 
