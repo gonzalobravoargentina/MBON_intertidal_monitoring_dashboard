@@ -2,7 +2,7 @@
 title: "Monitoreo Intermareales Rocosos"
 output:
   flexdashboard::flex_dashboard:
-    theme: cosmo
+    theme: cosmo  
     logo: logo_blanco.png
     vertical_layout: fill
     orientation: columns
@@ -443,8 +443,33 @@ classify_RISI <- function(x)
 # sólo sobre ese estrato) y Fotocuadrantes pasa el que elija el usuario.
 # Formato verificado contra un filtro real de CoralNet:
 #   ?aux3=<localidad>&aux4=<sitio>&aux5=<estrato>&photo_date_0=year&photo_date_1=<año>
+#   ?...&photo_date_0=date_range&photo_date_3=<desde>&photo_date_4=<hasta>
 # Es decir aux1..aux5 = country, state, locality, site, strata.
-build_coralnet_url <- function(loc, yr = NULL, strata = NULL, site = NULL) {
+#
+# CoralNet no tiene "estación". Cuando el tablero filtra por estación, el link
+# usa un RANGO DE FECHAS (rango_coralnet) en lugar del año. Verificado:
+# Islote Lobos · Pájaros · MIDTIDE · 2024-10-01..31 devuelve 41 fotos, igual
+# que el tablero con 2024 + Fría.
+
+# Rango de fechas que abarca `sel` (fechas de la selección) sin incluir
+# ninguna otra fecha de `todas` (fechas del mismo lugar/estrato, cualquier
+# estación). Si la selección queda partida (p. ej. Cálida 2024 = ene–may y
+# dic, con oct Fría en el medio), devuelve el bloque contiguo más grande y
+# parcial = TRUE.
+rango_coralnet <- function(sel, todas) {
+  sel <- sort(unique(as.Date(sel[!is.na(sel)])))
+  if (length(sel) == 0) return(NULL)
+  todas  <- sort(unique(as.Date(c(todas[!is.na(todas)], sel))))
+  en_sel <- todas %in% sel
+  bloque <- cumsum(c(TRUE, diff(en_sel) != 0))      # corridas de TRUE/FALSE
+  n      <- table(bloque[en_sel])                   # fechas por bloque elegido
+  mejor  <- as.integer(names(n)[which.max(n)])
+  f      <- todas[bloque == mejor]
+  list(desde = min(f), hasta = max(f), parcial = length(n) > 1)
+}
+
+build_coralnet_url <- function(loc, yr = NULL, strata = NULL, site = NULL,
+                               rango = NULL) {
   # El chunk de datos renombra "PIMCPA_ISLA TOVA" a "PIMCPA ISLA TOVA" para
   # mostrarlo prolijo, pero en CoralNet la localidad conserva el guion bajo.
   # Sin revertir el renombre acá, el link de esa localidad no devuelve nada.
@@ -456,8 +481,12 @@ build_coralnet_url <- function(loc, yr = NULL, strata = NULL, site = NULL) {
     base <- paste0(base, "&aux4=", gsub(" ", "+", site))
   if (!is.null(strata) && strata != "ALL")
     base <- paste0(base, "&aux5=", strata)
-  if (!is.null(yr) && yr != "ALL")
+  if (!is.null(rango)) {
+    base <- paste0(base, "&photo_date_0=date_range&photo_date_3=", rango$desde,
+                   "&photo_date_4=", rango$hasta)
+  } else if (!is.null(yr) && yr != "ALL") {
     base <- paste0(base, "&photo_date_0=year&photo_date_1=", yr)
+  }
   base
 }
 
@@ -1480,11 +1509,11 @@ output$heatmap_risi_desc <- renderUI({
 
 # Indicación destacada de que las cajas abren CoralNet
 output$heatmap_hint <- renderUI({
-  # CoralNet filtra por año, no por estación: con una estación seleccionada
-  # el link abre las fotos de ambas estaciones de ese año.
+  # CoralNet no filtra por estación: con una estación seleccionada cada caja
+  # abre el rango de fechas de esa campaña (ver rango_coralnet).
   est  <- input$sel_estacion
   nota <- if (!is.null(est) && est != "ALL")
-    tags$span(class = "nota", "· abre el año completo, ambas estaciones")
+    tags$span(class = "nota", paste0("· solo fechas de la estación ", tolower(est)))
   tags$div(class = "click-hint",
     tags$span(class = "ico", "📷"),
     tags$span(tags$b("Hacé click en una caja"), " para ver sus fotos en CoralNet"),
@@ -1517,6 +1546,7 @@ output$heatmap_risi <- renderPlotly({
                           levels = lat_order[lat_order %in% unique(eje_y)]))
 
   y_label <- if (by_site) "Sitio" else "Localidad"
+  con_estacion <- !is.null(input$sel_estacion) && input$sel_estacion != "ALL"
 
   # Misma paleta discreta de clases que el mapa y "Distribución de clases",
   # para que un mismo valor de RISI tenga el mismo color en toda la pestaña.
@@ -1525,10 +1555,19 @@ output$heatmap_risi <- renderPlotly({
            # texto oscuro sobre los tonos claros (Good, Moderate)
            txt_col = if_else(RISI_class %in% c("Good", "Moderate"), "#1a1a1a", "white"),
            # link a las fotos de esa caja: misma localidad/sitio, año y estrato
-           url = mapply(function(y, yr)
-                   if (by_site) build_coralnet_url(input$sel_localidad, yr, "MIDTIDE", y)
-                   else         build_coralnet_url(y, yr, "MIDTIDE"),
-                 as.character(eje_y), year, USE.NAMES = FALSE))
+           # con estación seleccionada: solo las fechas de esa estación
+           url = mapply(function(y, yr) {
+                   loc  <- if (by_site) input$sel_localidad else y
+                   site <- if (by_site) y else NULL
+                   rng  <- NULL
+                   if (con_estacion) {
+                     lugar <- AMP[AMP$locality == loc & AMP$strata == "MIDTIDE", ]
+                     if (by_site) lugar <- lugar[lugar$site == site, ]
+                     sel <- df_idx$Date[df_idx[[grp_var]] == y & df_idx$year == yr]
+                     rng <- rango_coralnet(sel, lugar$Date)
+                   }
+                   build_coralnet_url(loc, yr, "MIDTIDE", site, rango = rng)
+                 }, as.character(eje_y), year, USE.NAMES = FALSE))
 
   p <- ggplot(df_heat,
     aes(x = factor(year), y = eje_y, fill = RISI_class,
@@ -1658,13 +1697,33 @@ renderUI({
   yr     <- input$sel_year_fc
   strata <- input$sel_strata_fc
   sitio  <- input$sel_site_fc
+  est    <- input$sel_est_fc
   if (!is.null(loc) && loc != "ALL") {
-    url <- build_coralnet_url(loc, yr, strata, sitio)
+    # Con estación: rango de fechas de la selección (CoralNet no tiene estación)
+    rng <- NULL
+    if (!is.null(est) && est != "ALL") {
+      lugar <- AMP[AMP$locality == loc, ]
+      if (!is.null(sitio)  && sitio  != "ALL") lugar <- lugar[lugar$site   == sitio, ]
+      if (!is.null(strata) && strata != "ALL") lugar <- lugar[lugar$strata == strata, ]
+      rng <- rango_coralnet(AMP_filtrado_fc()$Date, lugar$Date)
+    }
+    url <- build_coralnet_url(loc, yr, strata, sitio, rango = rng)
     lbl_parts <- loc
     if (!is.null(sitio)  && sitio  != "ALL") lbl_parts <- paste0(lbl_parts, " · ", sitio)
     if (!is.null(strata) && strata != "ALL") lbl_parts <- paste0(lbl_parts, " · ", strata)
-    if (!is.null(yr)     && yr     != "ALL") lbl_parts <- paste0(lbl_parts, " (", yr, ")")
+    fmt <- function(d) format(d, "%d/%m/%Y")
+    if (!is.null(rng)) {
+      fechas <- if (rng$desde == rng$hasta) fmt(rng$desde)
+                else paste0(fmt(rng$desde), "–", fmt(rng$hasta))
+      lbl_parts <- paste0(lbl_parts, " · ", est, " ", fechas)
+    } else if (!is.null(yr) && yr != "ALL") {
+      lbl_parts <- paste0(lbl_parts, " (", yr, ")")
+    }
     lbl <- paste0("📷 Ver fotos – ", lbl_parts)
+    if (!is.null(rng) && rng$parcial)
+      lbl <- tagList(lbl, tags$br(),
+        tags$span(style = "font-weight:400;font-size:10px;color:#a9cfe0;",
+          "CoralNet no filtra por estación y estas fechas no son contiguas: se abre solo la campaña más grande"))
     tags$div(style="padding:10px 0 4px 0;",
       tags$a(href=url, target="_blank",
         style=paste0("display:block;width:100%;padding:8px 10px;background:#1e4d6b;",
