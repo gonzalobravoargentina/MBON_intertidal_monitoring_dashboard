@@ -1857,40 +1857,87 @@ tags$div(class="scroll-content",
 ```{r protocolo_page, echo=FALSE}
 url_obp <- "https://repository.oceanbestpractices.org/handle/11329/2199.2"
 url_pdf <- "pdf/protocolo_web.pdf"
+# Páginas del protocolo pre-renderizadas como JPG (pdf/paginas/p-01.jpg ...).
+# Se usan imágenes y no un <iframe> con el PDF porque el visor de PDF
+# embebido no existe en todos los navegadores (visor de RStudio, iPhone).
+n_paginas <- length(list.files("pdf/paginas", pattern = "^p-\\d+\\.jpg$"))
 estilo_boton <- function(bg) paste0("background:", bg, ";color:white;padding:9px 16px;border-radius:6px;",
-  "font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.15);")
+  "font-weight:700;font-size:13px;text-decoration:none;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.15);cursor:pointer;")
 
-tags$div(style="max-width:1100px;margin:0 auto;padding:20px 20px 30px 20px;font-size:14px;color:#3d4852;line-height:1.7;",
+tags$div(style="max-width:1100px;margin:0 auto;padding:16px 20px 30px 20px;font-size:14px;color:#3d4852;line-height:1.7;",
+  tags$style(HTML("
+    #prot-viewer { display:flex; align-items:center; justify-content:center; gap:14px;
+                   background:#f4f6f8; border:1px solid #dfe6ec; border-radius:8px; padding:14px; }
+    #prot-img    { max-height:calc(100vh - 260px); min-height:420px; max-width:100%;
+                   box-shadow:0 2px 10px rgba(0,0,0,0.18); background:white; }
+    .prot-nav    { border:none; background:#1b2a3b; color:white; width:44px; height:44px;
+                   border-radius:50%; font-size:22px; line-height:44px; cursor:pointer; flex:0 0 44px; }
+    .prot-nav:disabled { opacity:.25; cursor:default; }
+    #prot-count  { text-align:center; font-size:12px; color:#5d7a96; margin-top:6px; }
+  ")),
   # ── Encabezado + botones ─────────────────────────────────────
   tags$div(style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:14px;",
     tags$div(
-      tags$h2(style="font-size:22px;font-weight:700;color:#1e3a4a;margin:0 0 4px 0;border-bottom:3px solid #5ba4a4;display:inline-block;padding-bottom:4px;",
+      tags$div(style="font-size:22px;font-weight:700;color:#1e3a4a;border-bottom:3px solid #5ba4a4;display:inline-block;padding-bottom:2px;",
         "Protocolo de muestreo"),
-      tags$p(style="font-size:13px;color:#5d7a96;margin:6px 0 0 0;max-width:640px;",
-        "Protocolo MBON Pole to Pole para el monitoreo del intermareal rocoso con fotocuadrantes. Podés hojearlo acá abajo.")
+      tags$div(style="font-size:13px;color:#5d7a96;margin-top:6px;max-width:620px;",
+        "Protocolo MBON Pole to Pole para el monitoreo del intermareal rocoso con fotocuadrantes. Pasá las páginas con las flechas (o con ← → del teclado).")
     ),
     tags$div(style="display:flex;gap:8px;flex-wrap:wrap;",
+      # window.open fuerza una pestaña nueva también desde el visor de RStudio
       tags$a(href=url_pdf, target="_blank", style=estilo_boton("#5d7a96"),
-        HTML("&#x26F6;&nbsp; Abrir en pantalla completa")),
+        onclick="window.open(this.href, '_blank'); return false;",
+        HTML("&#x26F6;&nbsp; Abrir PDF en otra pestaña")),
       tags$a(href=url_obp, target="_blank", style=estilo_boton("#2c7873"),
+        onclick="window.open(this.href, '_blank'); return false;",
         HTML("&#11015;&nbsp; Descargar desde Ocean Best Practices"))
     )
   ),
-  # ── Visor del PDF ────────────────────────────────────────────
-  # Va en un uiOutput: Shiny no renderiza salidas de pestañas ocultas, así
-  # que el PDF (~6 MB) se descarga solo cuando alguien abre esta pestaña,
-  # no en cada visita al tablero.
+  # ── Visor ────────────────────────────────────────────────────
+  # En un uiOutput: Shiny no renderiza salidas de pestañas ocultas, así que
+  # las páginas se descargan recién cuando alguien abre esta pestaña.
   uiOutput("protocolo_visor"),
   tags$p(style="font-size:12px;color:#718096;margin-top:10px;",
     HTML(paste0("Versión oficial en el repositorio <em>Ocean Best Practices</em> (IOC-UNESCO): ",
-                "<a href='", url_obp, "' target='_blank' style='color:#2c7873;'>", url_obp, "</a>")))
+                "<a href='", url_obp, "' target='_blank' style='color:#2c7873;'>", url_obp, "</a>"))),
+  # Navegación: una sola definición, delegada en document
+  tags$script(HTML("
+    (function(){
+      function pagina(i){ return 'pdf/paginas/p-' + (i < 10 ? '0' : '') + i + '.jpg'; }
+      function ir(d){
+        var v = $('#prot-viewer'); if (!v.length) return;
+        var n = +v.data('n'), i = +v.data('i') + d;
+        if (i < 1 || i > n) return;
+        v.data('i', i);
+        $('#prot-img').attr('src', pagina(i));
+        $('#prot-count').text('Página ' + i + ' de ' + n);
+        $('#prot-prev').prop('disabled', i === 1);
+        $('#prot-next').prop('disabled', i === n);
+        if (i < n) (new Image()).src = pagina(i + 1);   // precarga la siguiente
+      }
+      $(document).on('click', '#prot-prev', function(){ ir(-1); });
+      $(document).on('click', '#prot-next', function(){ ir(+1); });
+      $(document).on('click', '#prot-img',  function(){ ir(+1); });
+      $(document).on('keydown', function(e){
+        if (!$('#prot-viewer').is(':visible')) return;
+        if (e.key === 'ArrowRight') ir(+1);
+        if (e.key === 'ArrowLeft')  ir(-1);
+      });
+    })();
+  "))
 )
 
 output$protocolo_visor <- renderUI({
-  tags$iframe(src = paste0(url_pdf, "#view=FitH&pagemode=none"),
-              title = "Protocolo de muestreo MBON Pole to Pole",
-              style = paste0("width:100%;height:calc(100vh - 230px);min-height:560px;",
-                             "border:1px solid #dfe6ec;border-radius:8px;background:#f4f6f8;"))
+  req(n_paginas > 0)
+  tagList(
+    tags$div(id = "prot-viewer", `data-n` = n_paginas, `data-i` = 1,
+      tags$button(id = "prot-prev", class = "prot-nav", disabled = NA, HTML("&#8249;")),
+      tags$img(id = "prot-img", src = "pdf/paginas/p-01.jpg",
+               alt = "Página del protocolo", title = "Click para pasar de página"),
+      tags$button(id = "prot-next", class = "prot-nav", HTML("&#8250;"))
+    ),
+    tags$div(id = "prot-count", paste("Página 1 de", n_paginas))
+  )
 })
 ```
 

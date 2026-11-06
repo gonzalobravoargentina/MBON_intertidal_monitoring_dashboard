@@ -5,7 +5,7 @@
 # Lo que SI necesita RISI_dashboard_v3.Rmd y por eso no esta aca:
 #   DATA/metadata.csv, DATA/percent_covers.csv, DATA/AMP_cache.rds,
 #   CATAMI_web.jpg, fotocuadrante_web.jpg, logo_blanco.png, RISI_1_web.jpg, RISI_2_web.jpg,
-#   pdf/protocolo_web.pdf
+#   pdf/ (protocolo_web.pdf y paginas/)
 
 # --- control de versiones y estado local de RStudio ---
 .git
