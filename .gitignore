@@ -11,3 +11,4 @@ DATA/annotations.csv
 DATA/annotations_confirmed.csv
 DATA/AMP_cache.rds
 .DS_Store
+DATA/correcciones_coralnet/

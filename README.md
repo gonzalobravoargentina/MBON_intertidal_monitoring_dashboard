@@ -70,7 +70,7 @@ The full definition (weights, thresholds, seasonal adjustment and collapse rule)
 - **Classification:** benthic categories follow the **CATAMI** scheme, which is based on morphology and growth form and is suited to image-based annotation.
 - **Files:** `DATA/metadata.csv` (image metadata) and `DATA/percent_covers.csv` (percent cover per image), both exported from CoralNet.
 - **Updating the dashboard:** replace these two CSVs with a new export. The data cache (`DATA/AMP_cache.rds`) is rebuilt automatically when they change.
-- **Metadata corrections:** corrections sent to CoralNet (for example, swapped site labels) are tracked in `DATA/correcciones_coralnet/`.
+- **Metadata corrections:** applied directly in CoralNet; the correction files are kept locally and are not part of this repository.
 
 ---
 
