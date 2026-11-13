@@ -1,94 +1,112 @@
 # Rocky Intertidal Monitoring Dashboard
 
-This repository contains an **interactive dashboard** designed to visualize and explore data from rocky intertidal monitoring surveys. The dashboard integrates photoquadrat data processed with artificial intelligence to provide an accessible overview of biodiversity patterns and ecological conditions across monitored sites.
+Interactive dashboard for exploring rocky intertidal monitoring data from the **MBON Pole to Pole** network along the Patagonian coast of Argentina. It summarizes thousands of photoquadrats annotated with AI-assisted image classification in **CoralNet**. The dashboard shows ecological condition, benthic cover and sampling effort through time and across sites.
 
-The tool allows users to explore spatial, temporal, and ecological information derived from standardized monitoring protocols implemented within the **MBON Pole to Pole network**.
+🔗 **Live dashboard:** https://mbon-poletopole.shinyapps.io/monitoreo-intermareal/
 
-🔗 **Live dashboard:**  
-https://mbon-poletopole.shinyapps.io/monitoreo-intermareal/
-
-## Dashboard Preview
-![Dashboard preview](dashboard.png)
+![Dashboard preview](dashboard_preview.jpg)
 
 ---
 
-## Overview
+## What the dashboard shows
 
-The dashboard compiles thousands of intertidal photoquadrats and summarizes them through interactive visualizations. Data are classified using **CATAMI categories**, which group organisms based primarily on visual characteristics observable in images (growth forms and morphology), enabling consistent analysis through automated image annotation tools.
+The interface is in Spanish and has four tabs.
 
-The platform also includes the **ARG-RI-EBQI (Argentine Rocky Intertidal Ecosystem-Based Quality Index)**, an ecological index designed to evaluate the condition of the **mid-intertidal zone** using key habitat-forming organisms such as mussels and macroalgae, together with the proportion of bare substrate.
+**Resultados (Results)**
+- **RISI map**: mean ecological condition of each locality (or each site, when a locality is selected), coloured by status class.
+- **Benthic cover by tidal level** (high, mid, low): cover can be shown as CATAMI categories or functional groups (invertebrates, algae, bare substrate).
+- **Mussel cover (MOB) through time**: one point per sampling campaign (warm and cold season) for each locality or site.
+- **RISI by locality/site and year**: a heatmap. Clicking a cell opens the corresponding photoquadrats in CoralNet.
+- **Distribution of RISI classes** across photoquadrats.
+- **CSV download** of the filtered mid-intertidal data with RISI values.
 
----
+**Fotocuadrantes (Photoquadrats)**
+- Map of every photoquadrat.
+- Sampling-effort heatmap (locality × campaign).
+- Effort metrics: photoquadrats, equivalent area, field days and sites.
+- Direct link to the selected images in CoralNet. When a season is selected, the link filters by date range.
 
-## Features
+**Protocolo (Protocol)**
+- Page-by-page viewer of the sampling protocol, with a link to the official version in Ocean Best Practices.
 
-- **Interactive map**
-  - Explore sampling locations and monitoring sites.
-  - View spatial distribution of photoquadrats and ecological index values.
+**Información (Information)**
+- Project background, publications and contact.
 
-- **Benthic cover visualization**
-  - Stacked bar charts summarizing percent cover of CATAMI categories.
-  - Data organized by locality, site, tidal level, and season.
-
-- **ARG-RI-EBQI ecological index**
-  - Map visualization of the average ecological condition for each locality or site.
-  - Bar charts showing the distribution of photoquadrats across ecological classes.
-
-- **Sampling effort metrics**
-  - Number of photoquadrats collected.
-  - Equivalent surveyed area.
-  - Number of sampling days.
-  - Spatial coverage of monitoring sites.
-
-- **Direct access to images**
-  - Links to CoralNet image repositories for each monitored locality.
+Filters cascade: each selector offers only the values that exist for the selections above it (locality → site → year → season → stratum).
 
 ---
 
-## Ecological Index (ARG-RI-EBQI)
+## RISI — Rocky Intertidal Status Index
 
-The **ARG-RI-EBQI (Argentine Rocky Intertidal Ecosystem-Based Quality Index)** ranges from **0 to 10** and summarizes the ecological condition of the mid-intertidal zone.
+The RISI summarizes the ecological condition of the **mid-intertidal** on a **0–10** scale, based on benthic cover in each photoquadrat.
 
-Higher values indicate healthier conditions characterized by well-developed mussel beds and structured macroalgal assemblages.
+- **High values**: the community is dominated by biogenic, habitat-forming structure (mussel beds, sheet-like algae).
+- **Low values**: bare rock or filamentous algal turf dominates.
 
-Index categories:
+The index has two components:
 
-| Category | Range |
-|--------|--------|
+- **BIO** (habitat-forming organisms) raises it.
+- **TBS** (turf and bare substrate, scored inversely) lowers it.
+
+RISI is computed for each photoquadrat and then averaged by site, locality and campaign.
+
+| Class | RISI |
+|---|---|
 | High | ≥ 7.5 |
-| Good | 6.0 – 7.49 |
-| Moderate | 4.5 – 5.99 |
-| Poor | 3.5 – 4.49 |
+| Good | 6.0 – 7.5 |
+| Moderate | 4.5 – 6.0 |
+| Poor | 3.5 – 4.5 |
 | Bad | < 3.5 |
 
----
+![RISI examples](RISI_1_web.jpg)
 
-## Data Source
-
-Data originate from **standardized rocky intertidal monitoring protocols** implemented across protected areas and coastal sites. The methodology is part of the **Marine Biodiversity Observation Network (MBON) Pole to Pole program**.
-
-Relevant documentation:
-
-- Intertidal monitoring protocol  
-  https://repository.oceanbestpractices.org/handle/11329/2199.2
-
-- Workshop publications describing the monitoring framework  
-  https://riojournal.com/article/126660/  
-  https://riojournal.com/article/163815/
+The full definition (weights, thresholds, seasonal adjustment and collapse rule) is in the code: see the `risi_params` chunk of `RISI_dashboard_v3.Rmd`. The method and its validation are described in Bravo et al. (in preparation).
 
 ---
 
-## Project Status
+## Data
 
-⚠️ The dashboard is **currently under active development**.
+- **Source:** CoralNet source [MBON P2P Intertidal Monitoring (ARG_UY)](https://coralnet.ucsd.edu/source/2897/).
+- **Classification:** benthic categories follow the **CATAMI** scheme, which is based on morphology and growth form and is suited to image-based annotation.
+- **Files:** `DATA/metadata.csv` (image metadata) and `DATA/percent_covers.csv` (percent cover per image), both exported from CoralNet.
+- **Updating the dashboard:** replace these two CSVs with a new export. The data cache (`DATA/AMP_cache.rds`) is rebuilt automatically when they change.
+- **Metadata corrections:** corrections sent to CoralNet (for example, swapped site labels) are tracked in `DATA/correcciones_coralnet/`.
 
-The present version includes monitoring sites from **Argentina**, and additional regions from other participating countries will be incorporated as data processing and harmonization progresses.
+---
+
+## Running locally
+
+Open `RISI_dashboard_v3.Rmd` in RStudio and click **Run Document**.
+
+Required packages: `flexdashboard`, `shiny`, `dplyr`, `tidyr`, `readr`, `lubridate`, `leaflet`, `plotly`, `ggplot2`, `RColorBrewer`, `scales`, `forcats`, `stringr`, `htmlwidgets`.
+
+To deploy to shinyapps.io:
+
+```r
+rsconnect::deployApp(appPrimaryDoc = "RISI_dashboard_v3.Rmd",
+                     appName = "monitoreo-intermareal")
+```
+
+Files that should not be uploaded (raw annotations, originals of images, older dashboard versions) are listed in `.rscignore`.
+
+---
+
+## Protocol and publications
+
+- Intertidal monitoring protocol (Ocean Best Practices): https://repository.oceanbestpractices.org/handle/11329/2199.2
+- MBON Intertidal Monitoring Workshop 2024 (RIO Journal): https://riojournal.com/article/126660/
+- MBON Intertidal Monitoring Workshop 2025 (RIO Journal): https://riojournal.com/article/163815/
+
+---
+
+## Project status
+
+⚠️ Under active development. The current version covers monitoring sites in **Argentina**. Sites from other participating countries will be added as data are processed and harmonized.
 
 ---
 
 ## Author
 
-**Dr. Gonzalo Bravo**  
-Implementation of Artificial Intelligence Tools for Marine Biodiversity Monitoring in Protected Areas  
-
+**Dr. Gonzalo Bravo**
+Implementation of Artificial Intelligence Tools for Marine Biodiversity Monitoring in Protected Areas
 Marine Biodiversity Observation Network (MBON) – Pole to Pole

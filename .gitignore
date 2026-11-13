@@ -5,3 +5,9 @@
 
 # credenciales de shinyapps.io: nunca al repo
 Publicar Shiny.R
+
+# archivos pesados o locales: no van al repo
+DATA/annotations.csv
+DATA/annotations_confirmed.csv
+DATA/AMP_cache.rds
+.DS_Store
